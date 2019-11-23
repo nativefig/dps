@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -51,7 +52,7 @@ const size_t NumEventKinds = 0
     X(Hit)
 
 enum AttackKind {
-    #define X(NAME) EK_##NAME,
+    #define X(NAME) AK_##NAME,
     ATTACK_KIND_LIST
     #undef X
 };
@@ -80,6 +81,24 @@ const size_t NumAttackKinds = 0
 
 struct DPS;
 
+struct Context {
+    //std::random_device rd;
+    std::default_random_engine random;
+    std::uniform_int_distribution<unsigned> dist;
+
+    Context() : random(std::random_device()()) { }
+
+    unsigned rand() {
+        return dist(random);
+    }
+
+    bool chance(double ch) {
+        if (ch >= 1.0)
+            return true;
+        return unsigned(ch * UINT_MAX) > rand();
+    }
+};
+
 template <EventKind EK, unsigned NumTicks, unsigned Period>
 struct Tick {
     unsigned ticks = 0;
@@ -106,19 +125,6 @@ struct AttackTable {
 
     uint64_t table[TableSize] = { 0 };
 
-    AttackTable() {
-        update(AK_Miss, 0.05 +
-                        levelDelta * 0.01 +
-                        (levelDelta > 2 ? 0.1 : 0.0);
-        update(AK_Dodge, 0.05 + levelDelta * 0.005);
-        //update(AK_Parry, 0.0);
-        update(AK_Glance, 0.1 + 0.1 * levelDelta);
-        //update(AK_Block, 0.0);
-        // TODO -1.8% chance to crit on lv +3 mobs
-        update(AK_Crit, 0.05 - 0.01 * levelDelta);
-        update(AK_Hit);
-    }
-
     void update(AttackKind ak, double chance) {
         assert(size_t(ak) < TableSize);
         if (chance < 0.0) {
@@ -134,7 +140,14 @@ struct AttackTable {
         }
     }
 
-    AttackKind roll() {
+    AttackKind roll(Context &ctx) {
+        unsigned roll = ctx.rand();
+        size_t i;
+        for (i = 0; i < TableSize; ++i) {
+            if (table[i] > roll)
+                break;
+        }
+        return AttackKind(i);
     }
 };
 
@@ -147,17 +160,15 @@ struct DPS {
 
     unsigned rage = 0;
 
-    //std::random_device rd;
-    std::default_random_engine random;
-    std::uniform_int_distribution<unsigned> dist;
-
     Tick<EK_DeepWoundsTick, 4, 3> deepWoundsTicks;
     Tick<EK_BloodrageTick, 10, 1> bloodrageTicks;
+
+    Context ctx;
 
     AttackTable whiteTable;
     AttackTable specialTable;
 
-    DPS() : random(std::random_device()()) {
+    DPS() {
         for (double &event : events) {
             event = DBL_MAX;
         }
@@ -165,7 +176,7 @@ struct DPS {
         whiteTable.update(AK_Miss, 0.05 +
                         levelDelta * 0.01 +
                         (levelDelta > 2 ? 0.1 : 0.0) +
-                        (dualWield ? 0.19 : 0.0);
+                        (dualWield ? 0.19 : 0.0));
         whiteTable.update(AK_Dodge, 0.05 + levelDelta * 0.005);
         whiteTable.update(AK_Glance, 0.1 + 0.1 * levelDelta);
         // TODO -1.8% chance to crit on lv +3 mobs
@@ -173,13 +184,13 @@ struct DPS {
 
         specialTable.update(AK_Miss, 0.05 +
                         levelDelta * 0.01 +
-                        (levelDelta > 2 ? 0.1 : 0.0);
+                        (levelDelta > 2 ? 0.1 : 0.0));
         specialTable.update(AK_Dodge, 0.05 + levelDelta * 0.005);
         // TODO -1.8% chance to crit on lv +3 mobs
         specialTable.update(AK_Crit, 0.05 - 0.01 * levelDelta);
     }
 
-    void triggerSwordSpec() {
+    void trySwordSpec() {
         // TODO
     }
 
@@ -206,7 +217,7 @@ struct DPS {
         if (isMortalStrikeAvailable()) {
             events[EK_MortalStrikeCD] = curTime + 6;
             trySwordSpec();
-            totalDamage += u
+            totalDamage += 100;
             // TODO
         } else if (isWhirlwindAvailable()) {
             events[EK_WhirlwindCD] = curTime + 10;
@@ -217,7 +228,7 @@ struct DPS {
 
     void gainRage(unsigned r) {
         rage += r;
-        trySpecialAttack()
+        trySpecialAttack();
     }
 
     void run();
@@ -251,7 +262,7 @@ void DPS::run() {
     double mortalStrikeDamage = swingDamage + 160;
     (void)mortalStrikeDamage;
 
-    swingDamage *= twoHandSpecCoefficient;
+    //swingDamage *= twoHandSpecCoefficient;
     //swingDamage *= armorCoefficient;
 
     double totalDamage = 0.0;
@@ -279,11 +290,25 @@ void DPS::run() {
         }
 
         switch (curEvent) {
-        case EK_WeaponSwing:
-            totalDamage += unsigned(swingDamage);
+        case EK_WeaponSwing: {
             events[curEvent] += swingTime;
+
+            AttackKind ak = whiteTable.roll(ctx);
+            switch (ak) {
+            case AK_Miss:
+            case AK_Dodge:
+            case AK_Parry:
+                break;
+            case AK_Glance:
+            case AK_Block:
+            case AK_Crit:
+            case AK_Hit:
+                totalDamage += unsigned(swingDamage);
+                break;
+            }
             gainRage(10);
             break;
+        }
         case EK_AngerManagement:
             events[curEvent] += 3;
             gainRage(1);
