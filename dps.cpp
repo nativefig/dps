@@ -42,7 +42,7 @@ const size_t NumEventKinds = 0
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////
-#define ATTACK_KIND_LIST \
+#define HIT_KIND_LIST \
     X(Miss) \
     X(Dodge) \
     X(Parry) \
@@ -51,24 +51,24 @@ const size_t NumEventKinds = 0
     X(Crit) \
     X(Hit)
 
-enum AttackKind {
-    #define X(NAME) AK_##NAME,
-    ATTACK_KIND_LIST
+enum HitKind {
+    #define X(NAME) HK_##NAME,
+    HIT_KIND_LIST
     #undef X
 };
 
-const char *getAttackName(AttackKind ak) {
+const char *getHitKindName(HitKind ak) {
     switch (ak) {
-    #define X(NAME) case AK_##NAME: return #NAME;
-    ATTACK_KIND_LIST
+    #define X(NAME) case HK_##NAME: return #NAME;
+    HIT_KIND_LIST
     #undef X
     }
     assert(0);
     return "";
 }
-const size_t NumAttackKinds = 0
+const size_t NumHitKinds = 0
     #define X(NAME) + 1
-    ATTACK_KIND_LIST
+    HIT_KIND_LIST
     #undef X
     ;
 ////////////////////////////////////////////////////////////////////////////////
@@ -88,14 +88,16 @@ struct Context {
 
     Context() : random(std::random_device()()) { }
 
-    unsigned rand() {
+    uint64_t rand() {
         return dist(random);
     }
-
+    unsigned rand(unsigned x) {
+        return (x * rand()) >> 32;
+    }
     bool chance(double ch) {
         if (ch >= 1.0)
             return true;
-        return unsigned(ch * UINT_MAX) > rand();
+        return uint64_t(ch * UINT_MAX) > rand();
     }
 };
 
@@ -113,19 +115,33 @@ bool debug = true;
 bool frontAttack = false;
 bool dualWield = false;
 unsigned enemyLevel = 60;
-double armorCoefficient = 0.66;
-unsigned attackPower = 100;
 unsigned twoHandSpecLevel = 3;
+unsigned impaleLevel = 2;
+double armorMul = 0.66;
+
+unsigned strength = 100;
+unsigned bonusAttackPower = 100;
+
+double swingTime = 3.3;
+double weaponDamageMin = 100;
+double weaponDamageMax = 200;
 ////////////////////////////////////////////////////////////////////////////////
 
+// TODO add battle shout bonus
+unsigned attackPower = 20 + strength * 2 + bonusAttackPower;
 unsigned levelDelta = enemyLevel - 60;
 
+double attackMul = armorMul * (1.0 + 0.01 * twoHandSpecLevel);
+double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
+double whiteCritMul = 2.0 * attackMul;
+double specialCritMul = 2.2 * attackMul;
+                   
 struct AttackTable {
-    static const size_t TableSize = NumAttackKinds - 1;
+    static const size_t TableSize = NumHitKinds - 1;
 
     uint64_t table[TableSize] = { 0 };
 
-    void update(AttackKind ak, double chance) {
+    void update(HitKind ak, double chance) {
         assert(size_t(ak) < TableSize);
         if (chance < 0.0) {
             chance = 0.0;
@@ -140,14 +156,14 @@ struct AttackTable {
         }
     }
 
-    AttackKind roll(Context &ctx) {
-        unsigned roll = ctx.rand();
+    HitKind roll(Context &ctx) {
+        uint64_t roll = ctx.rand();
         size_t i;
         for (i = 0; i < TableSize; ++i) {
             if (table[i] > roll)
                 break;
         }
-        return AttackKind(i);
+        return HitKind(i);
     }
 };
 
@@ -173,25 +189,33 @@ struct DPS {
             event = DBL_MAX;
         }
 
-        whiteTable.update(AK_Miss, 0.05 +
+        whiteTable.update(HK_Miss, 0.05 +
                         levelDelta * 0.01 +
                         (levelDelta > 2 ? 0.1 : 0.0) +
                         (dualWield ? 0.19 : 0.0));
-        whiteTable.update(AK_Dodge, 0.05 + levelDelta * 0.005);
-        whiteTable.update(AK_Glance, 0.1 + 0.1 * levelDelta);
+        whiteTable.update(HK_Dodge, 0.05 + levelDelta * 0.005);
+        whiteTable.update(HK_Glance, 0.1 + 0.1 * levelDelta);
         // TODO -1.8% chance to crit on lv +3 mobs
-        whiteTable.update(AK_Crit, 0.05 - 0.01 * levelDelta);
+        whiteTable.update(HK_Crit, 0.05 - 0.01 * levelDelta);
 
-        specialTable.update(AK_Miss, 0.05 +
+        specialTable.update(HK_Miss, 0.05 +
                         levelDelta * 0.01 +
                         (levelDelta > 2 ? 0.1 : 0.0));
-        specialTable.update(AK_Dodge, 0.05 + levelDelta * 0.005);
+        specialTable.update(HK_Dodge, 0.05 + levelDelta * 0.005);
         // TODO -1.8% chance to crit on lv +3 mobs
-        specialTable.update(AK_Crit, 0.05 - 0.01 * levelDelta);
+        specialTable.update(HK_Crit, 0.05 - 0.01 * levelDelta);
     }
 
     void trySwordSpec() {
         // TODO
+        // This resets the swing timer when it procs from a special attack
+    }
+
+    // Return weapon damage without any multipliers applied
+    double getWeaponDamage() {
+        return weaponDamageMin +
+               ctx.rand(weaponDamageMax - weaponDamageMin) +
+               ((attackPower / 14) * swingTime);
     }
 
     bool isMortalStrikeAvailable() const {
@@ -231,6 +255,36 @@ struct DPS {
         trySpecialAttack();
     }
 
+    void weaponSwing() {
+        events[EK_WeaponSwing] += swingTime;
+
+        HitKind ak = whiteTable.roll(ctx);
+        if (debug) {
+            std::cout << "    " << getHitKindName(ak) << "\n";
+        }
+        // TODO avoid multiplies at runtime by applying them doing them ahead of time
+        double mul;
+        switch (ak) {
+        case HK_Miss:
+        case HK_Dodge:
+        case HK_Parry:
+            return;
+        case HK_Glance:
+            mul = glanceMul;
+            break;
+        case HK_Crit:
+            deepWoundsTicks.start(*this);
+            mul = whiteCritMul;
+            break;
+        case HK_Hit:
+        case HK_Block:
+            mul = attackMul;
+            break;
+        }
+        double damage = getWeaponDamage() * mul;
+        totalDamage += unsigned(damage);
+        gainRage(10);
+    }
     void run();
 };
 
@@ -253,7 +307,6 @@ void Tick<EK, NumTicks, Period>::tick(DPS &dps) {
 }
 
 void DPS::run() {
-    double swingTime = 3.3;
     double weaponDamage = 100;
     double swingDamage = weaponDamage;
     // Apply attack power
@@ -261,11 +314,6 @@ void DPS::run() {
 
     double mortalStrikeDamage = swingDamage + 160;
     (void)mortalStrikeDamage;
-
-    //swingDamage *= twoHandSpecCoefficient;
-    //swingDamage *= armorCoefficient;
-
-    double totalDamage = 0.0;
 
     events[EK_WeaponSwing] = 0.0;
     events[EK_AngerManagement] = 0.0;
@@ -291,22 +339,7 @@ void DPS::run() {
 
         switch (curEvent) {
         case EK_WeaponSwing: {
-            events[curEvent] += swingTime;
-
-            AttackKind ak = whiteTable.roll(ctx);
-            switch (ak) {
-            case AK_Miss:
-            case AK_Dodge:
-            case AK_Parry:
-                break;
-            case AK_Glance:
-            case AK_Block:
-            case AK_Crit:
-            case AK_Hit:
-                totalDamage += unsigned(swingDamage);
-                break;
-            }
-            gainRage(10);
+            weaponSwing();
             break;
         }
         case EK_AngerManagement:
@@ -322,6 +355,8 @@ void DPS::run() {
             break;
         case EK_MortalStrikeCD:
         case EK_WhirlwindCD:
+        case EK_GlobalCD:
+            events[curEvent] += DBL_MAX;
             trySpecialAttack();
             break;
         case EK_BloodrageCD:
@@ -329,9 +364,6 @@ void DPS::run() {
             events[curEvent] += 60;
             gainRage(10);
             bloodrageTicks.start(*this);
-            break;
-        case EK_GlobalCD:
-            trySpecialAttack();
             break;
         }
     }
