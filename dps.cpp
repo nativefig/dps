@@ -3,8 +3,10 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <random>
 #include <vector>
 
+////////////////////////////////////////////////////////////////////////////////
 #define EVENT_LIST \
     X(WeaponSwing) \
     X(AngerManagement) \
@@ -36,11 +38,42 @@ const size_t NumEventKinds = 0
     EVENT_LIST
     #undef X
     ;
+////////////////////////////////////////////////////////////////////////////////
 
-double armorCoefficient = 0.66;
-// 14 attack power = 1 dps
-unsigned attackPower = 100;
-double twoHandSpecCoefficient = 1.03;
+////////////////////////////////////////////////////////////////////////////////
+#define ATTACK_KIND_LIST \
+    X(Miss) \
+    X(Dodge) \
+    X(Parry) \
+    X(Glance) \
+    X(Block) \
+    X(Crit) \
+    X(Hit)
+
+enum AttackKind {
+    #define X(NAME) EK_##NAME,
+    ATTACK_KIND_LIST
+    #undef X
+};
+
+const char *getAttackName(AttackKind ak) {
+    switch (ak) {
+    #define X(NAME) case AK_##NAME: return #NAME;
+    ATTACK_KIND_LIST
+    #undef X
+    }
+    assert(0);
+    return "";
+}
+const size_t NumAttackKinds = 0
+    #define X(NAME) + 1
+    ATTACK_KIND_LIST
+    #undef X
+    ;
+////////////////////////////////////////////////////////////////////////////////
+
+// TODO replace unsigned with size_t - should be faster?
+
 
 // TODO Deep wounds is 4 ticks at 3, 6, 9, 12 for 60% of average weapon damage
 // ignoring armor Doesn't refresh or benefit from e.g. mortal strike bonus damage
@@ -55,6 +88,56 @@ struct Tick {
     void tick(DPS &dps);
 };
 
+bool debug = true;
+
+// Parameters //////////////////////////////////////////////////////////////////
+bool frontAttack = false;
+bool dualWield = false;
+unsigned enemyLevel = 60;
+double armorCoefficient = 0.66;
+unsigned attackPower = 100;
+unsigned twoHandSpecLevel = 3;
+////////////////////////////////////////////////////////////////////////////////
+
+unsigned levelDelta = enemyLevel - 60;
+
+struct AttackTable {
+    static const size_t TableSize = NumAttackKinds - 1;
+
+    uint64_t table[TableSize] = { 0 };
+
+    AttackTable() {
+        update(AK_Miss, 0.05 +
+                        levelDelta * 0.01 +
+                        (levelDelta > 2 ? 0.1 : 0.0);
+        update(AK_Dodge, 0.05 + levelDelta * 0.005);
+        //update(AK_Parry, 0.0);
+        update(AK_Glance, 0.1 + 0.1 * levelDelta);
+        //update(AK_Block, 0.0);
+        // TODO -1.8% chance to crit on lv +3 mobs
+        update(AK_Crit, 0.05 - 0.01 * levelDelta);
+        update(AK_Hit);
+    }
+
+    void update(AttackKind ak, double chance) {
+        assert(size_t(ak) < TableSize);
+        if (chance < 0.0) {
+            chance = 0.0;
+        }
+        assert(chance <= 1.0);
+        auto oldVal = table[ak];
+        auto newVal = uint64_t(chance * UINT_MAX);
+        table[ak] = newVal;
+        int64_t delta = newVal - oldVal;
+        for (size_t i = size_t(ak) + 1; i < TableSize; ++i) {
+            table[i] += delta;
+        }
+    }
+
+    AttackKind roll() {
+    }
+};
+
 // TODO rename
 struct DPS {
     // TODO make a typedef for the time type and define constants for not-scheduled
@@ -64,15 +147,40 @@ struct DPS {
 
     unsigned rage = 0;
 
-    bool debug = true;
+    //std::random_device rd;
+    std::default_random_engine random;
+    std::uniform_int_distribution<unsigned> dist;
 
     Tick<EK_DeepWoundsTick, 4, 3> deepWoundsTicks;
     Tick<EK_BloodrageTick, 10, 1> bloodrageTicks;
 
-    DPS() {
+    AttackTable whiteTable;
+    AttackTable specialTable;
+
+    DPS() : random(std::random_device()()) {
         for (double &event : events) {
             event = DBL_MAX;
         }
+
+        whiteTable.update(AK_Miss, 0.05 +
+                        levelDelta * 0.01 +
+                        (levelDelta > 2 ? 0.1 : 0.0) +
+                        (dualWield ? 0.19 : 0.0);
+        whiteTable.update(AK_Dodge, 0.05 + levelDelta * 0.005);
+        whiteTable.update(AK_Glance, 0.1 + 0.1 * levelDelta);
+        // TODO -1.8% chance to crit on lv +3 mobs
+        whiteTable.update(AK_Crit, 0.05 - 0.01 * levelDelta);
+
+        specialTable.update(AK_Miss, 0.05 +
+                        levelDelta * 0.01 +
+                        (levelDelta > 2 ? 0.1 : 0.0);
+        specialTable.update(AK_Dodge, 0.05 + levelDelta * 0.005);
+        // TODO -1.8% chance to crit on lv +3 mobs
+        specialTable.update(AK_Crit, 0.05 - 0.01 * levelDelta);
+    }
+
+    void triggerSwordSpec() {
+        // TODO
     }
 
     bool isMortalStrikeAvailable() const {
@@ -97,15 +205,19 @@ struct DPS {
     void trySpecialAttack() {
         if (isMortalStrikeAvailable()) {
             events[EK_MortalStrikeCD] = curTime + 6;
+            trySwordSpec();
+            totalDamage += u
             // TODO
         } else if (isWhirlwindAvailable()) {
             events[EK_WhirlwindCD] = curTime + 10;
+            //trySwordSpec(); ?????????
             // TODO
         }
     }
 
     void gainRage(unsigned r) {
         rage += r;
+        trySpecialAttack()
     }
 
     void run();
@@ -146,7 +258,7 @@ void DPS::run() {
 
     events[EK_WeaponSwing] = 0.0;
     events[EK_AngerManagement] = 0.0;
-    while (curTime < 10 * 60) {
+    while (curTime < 1 * 60 * 60) {
         EventKind curEvent;
         {
             size_t lowIndex = 0;
@@ -168,7 +280,7 @@ void DPS::run() {
 
         switch (curEvent) {
         case EK_WeaponSwing:
-            totalDamage += swingDamage;
+            totalDamage += unsigned(swingDamage);
             events[curEvent] += swingTime;
             gainRage(10);
             break;
