@@ -113,41 +113,32 @@ unsigned mortalStrikeCost = 30;
 unsigned whirlwindCost = 25;
 ////////////////////////////////////////////////////////////////////////////////
 
-// Parameters //////////////////////////////////////////////////////////////////
-bool frontAttack = false;
-bool dualWield = false;
-unsigned enemyLevel = 60;
-double armorMul = 0.66;
+struct Params {
+    bool frontAttack = false;
+    bool dualWield = false;
+    unsigned enemyLevel = 60;
+    double armorMul = 0.66;
 
-// Stats
-unsigned strength = 100;
-unsigned bonusAttackPower = 100;
-unsigned hitBonus = 4;
-unsigned critBonus = 5;
+    // Stats
+    unsigned strength = 100;
+    unsigned bonusAttackPower = 100;
+    unsigned hitBonus = 4;
+    unsigned critBonus = 5;
 
-// Weapons
-double swingTime = 3.3;
-double weaponDamageMin = 100;
-double weaponDamageMax = 200;
+    // Weapons
+    double swingTime = 3.3;
+    double weaponDamageMin = 100;
+    double weaponDamageMax = 200;
 
-// Talents
-unsigned twoHandSpecLevel = 3;
-unsigned swordSpecLevel = 5;
-unsigned axeSpecLevel = 0;
-unsigned impaleLevel = 2;
-unsigned improvedBattleShoutLevel = 0;
-unsigned crueltyLevel = 3;
-////////////////////////////////////////////////////////////////////////////////
+    // Talents
+    unsigned twoHandSpecLevel = 3;
+    unsigned swordSpecLevel = 5;
+    unsigned axeSpecLevel = 0;
+    unsigned impaleLevel = 2;
+    unsigned improvedBattleShoutLevel = 0;
+    unsigned crueltyLevel = 3;
+};
 
-// Derived constants ///////////////////////////////////////////////////////////
-unsigned attackPower = (193 * (1.0 + 0.05 * improvedBattleShoutLevel)) +
-                       strength * 2 + bonusAttackPower;
-unsigned levelDelta = enemyLevel - 60;
-
-double attackMul = armorMul * (1.0 + 0.01 * twoHandSpecLevel);
-double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
-double whiteCritMul = 2.0 * attackMul;
-double specialCritMul = 2.0 + (impaleLevel * 0.1) * attackMul;
 ////////////////////////////////////////////////////////////////////////////////
 
 struct AttackTable {
@@ -155,7 +146,7 @@ struct AttackTable {
 
     uint64_t table[TableSize] = { 0 };
 
-    void update(HitKind hk, double chance) {
+    void set(HitKind hk, double chance) {
         assert(size_t(hk) < TableSize);
         if (chance < 0.0) {
             chance = 0.0;
@@ -183,6 +174,14 @@ struct AttackTable {
 
 // TODO rename
 struct DPS {
+    const Params params;
+
+    const unsigned levelDelta = enemyLevel - 60;
+    const double attackMul = armorMul * (1.0 + 0.01 * twoHandSpecLevel);
+    const double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
+    const double whiteCritMul = 2.0 * attackMul;
+    const double specialCritMul = 2.0 + (impaleLevel * 0.1) * attackMul;
+
     // TODO make a typedef for the time type and define constants for not-scheduled
     double events[NumEventKinds];
     double curTime = 0.0;
@@ -191,6 +190,9 @@ struct DPS {
     unsigned rage = 0;
 
     // Round for each tick?
+    unsigned attackPower = (193 * (1.0 + 0.05 * improvedBattleShoutLevel))
+                           + strength * 2
+                           + bonusAttackPower;
     unsigned deepWoundsTickDamage = 0;
 
     Tick<EK_DeepWoundsTick, 4, 3> deepWoundsTicks;
@@ -201,7 +203,7 @@ struct DPS {
     AttackTable whiteTable;
     AttackTable specialTable;
 
-    DPS() {
+    DPS(const Params &params) : params(params) { }
         for (double &event : events) {
             event = DBL_MAX;
         }
@@ -214,19 +216,21 @@ struct DPS {
                             - (0.01 * levelDelta)
                             - (levelDelta > 2 ? 0.018 : 0.0);
 
-        whiteTable.update(HK_Miss, 0.05 +
-                        levelDelta * 0.01 +
-                        (levelDelta > 2 ? 0.1 : 0.0) +
-                        (dualWield ? 0.19 : 0.0));
-        whiteTable.update(HK_Dodge, dodgeChance);
-        whiteTable.update(HK_Glance, 0.1 + 0.1 * levelDelta);
-        whiteTable.update(HK_Crit, critChance);
+        whiteTable.set(HK_Miss,
+                       0.05
+                       + levelDelta * 0.01
+                       + (levelDelta > 2 ? 0.1 : 0.0)
+                       + (dualWield ? 0.19 : 0.0));
+        whiteTable.set(HK_Dodge, dodgeChance);
+        whiteTable.set(HK_Glance, 0.1 + 0.1 * levelDelta);
+        whiteTable.set(HK_Crit, critChance);
 
-        specialTable.update(HK_Miss, 0.05 +
-                        levelDelta * 0.01 +
-                        (levelDelta > 2 ? 0.1 : 0.0));
-        specialTable.update(HK_Dodge, dodgeChance);
-        specialTable.update(HK_Crit, critChance);
+        specialTable.set(HK_Miss,
+                         0.05
+                         + levelDelta * 0.01
+                         + (levelDelta > 2 ? 0.1 : 0.0));
+        specialTable.set(HK_Dodge, dodgeChance);
+        specialTable.set(HK_Crit, critChance);
     }
 
     void trySwordSpec() {
@@ -422,7 +426,8 @@ void DPS::run() {
 }
 
 int main() {
-    DPS dps;
+    Params params;
+    DPS dps(params);
     dps.run();
 }
 
