@@ -57,8 +57,8 @@ enum HitKind {
     #undef X
 };
 
-const char *getHitKindName(HitKind ak) {
-    switch (ak) {
+const char *getHitKindName(HitKind hk) {
+    switch (hk) {
     #define X(NAME) case HK_##NAME: return #NAME;
     HIT_KIND_LIST
     #undef X
@@ -75,9 +75,6 @@ const size_t NumHitKinds = 0
 
 // TODO replace unsigned with size_t - should be faster?
 
-
-// TODO Deep wounds is 4 ticks at 3, 6, 9, 12 for 60% of average weapon damage
-// ignoring armor Doesn't refresh or benefit from e.g. mortal strike bonus damage
 
 struct DPS;
 
@@ -111,47 +108,64 @@ struct Tick {
 
 bool debug = true;
 
+// Constants ///////////////////////////////////////////////////////////////////
+unsigned mortalStrikeCost = 30;
+unsigned whirlwindCost = 25;
+////////////////////////////////////////////////////////////////////////////////
+
 // Parameters //////////////////////////////////////////////////////////////////
 bool frontAttack = false;
 bool dualWield = false;
 unsigned enemyLevel = 60;
-unsigned twoHandSpecLevel = 3;
-unsigned impaleLevel = 2;
 double armorMul = 0.66;
 
+// Stats
 unsigned strength = 100;
 unsigned bonusAttackPower = 100;
+unsigned hitBonus = 4;
+unsigned critBonus = 5;
 
+// Weapons
 double swingTime = 3.3;
 double weaponDamageMin = 100;
 double weaponDamageMax = 200;
+
+// Talents
+unsigned twoHandSpecLevel = 3;
+unsigned swordSpecLevel = 5;
+unsigned axeSpecLevel = 0;
+unsigned impaleLevel = 2;
+unsigned improvedBattleShoutLevel = 0;
+unsigned crueltyLevel = 3;
 ////////////////////////////////////////////////////////////////////////////////
 
-// TODO add battle shout bonus
-unsigned attackPower = 20 + strength * 2 + bonusAttackPower;
+// Derived constants ///////////////////////////////////////////////////////////
+unsigned attackPower = (193 * (1.0 + 0.05 * improvedBattleShoutLevel)) +
+                       strength * 2 + bonusAttackPower;
 unsigned levelDelta = enemyLevel - 60;
 
 double attackMul = armorMul * (1.0 + 0.01 * twoHandSpecLevel);
 double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
 double whiteCritMul = 2.0 * attackMul;
-double specialCritMul = 2.2 * attackMul;
-                   
+double specialCritMul = 2.0 + (impaleLevel * 0.1) * attackMul;
+////////////////////////////////////////////////////////////////////////////////
+
 struct AttackTable {
     static const size_t TableSize = NumHitKinds - 1;
 
     uint64_t table[TableSize] = { 0 };
 
-    void update(HitKind ak, double chance) {
-        assert(size_t(ak) < TableSize);
+    void update(HitKind hk, double chance) {
+        assert(size_t(hk) < TableSize);
         if (chance < 0.0) {
             chance = 0.0;
         }
         assert(chance <= 1.0);
-        auto oldVal = table[ak];
+        auto oldVal = table[hk];
         auto newVal = uint64_t(chance * UINT_MAX);
-        table[ak] = newVal;
+        table[hk] = newVal;
         int64_t delta = newVal - oldVal;
-        for (size_t i = size_t(ak) + 1; i < TableSize; ++i) {
+        for (size_t i = size_t(hk) + 1; i < TableSize; ++i) {
             table[i] += delta;
         }
     }
@@ -176,6 +190,9 @@ struct DPS {
 
     unsigned rage = 0;
 
+    // Round for each tick?
+    unsigned deepWoundsTickDamage = 0;
+
     Tick<EK_DeepWoundsTick, 4, 3> deepWoundsTicks;
     Tick<EK_BloodrageTick, 10, 1> bloodrageTicks;
 
@@ -189,37 +206,48 @@ struct DPS {
             event = DBL_MAX;
         }
 
+        double dodgeChance = 0.05 + (levelDelta * 0.005);
+        // TODO when I implement overpower I'll need to add stance bonuses
+        double critChance = 0.05
+                            + 0.03 // Berserker stance
+                            + (0.01 * (crueltyLevel + axeSpecLevel))
+                            - (0.01 * levelDelta)
+                            - (levelDelta > 2 ? 0.018 : 0.0);
+
         whiteTable.update(HK_Miss, 0.05 +
                         levelDelta * 0.01 +
                         (levelDelta > 2 ? 0.1 : 0.0) +
                         (dualWield ? 0.19 : 0.0));
-        whiteTable.update(HK_Dodge, 0.05 + levelDelta * 0.005);
+        whiteTable.update(HK_Dodge, dodgeChance);
         whiteTable.update(HK_Glance, 0.1 + 0.1 * levelDelta);
-        // TODO -1.8% chance to crit on lv +3 mobs
-        whiteTable.update(HK_Crit, 0.05 - 0.01 * levelDelta);
+        whiteTable.update(HK_Crit, critChance);
 
         specialTable.update(HK_Miss, 0.05 +
                         levelDelta * 0.01 +
                         (levelDelta > 2 ? 0.1 : 0.0));
-        specialTable.update(HK_Dodge, 0.05 + levelDelta * 0.005);
-        // TODO -1.8% chance to crit on lv +3 mobs
-        specialTable.update(HK_Crit, 0.05 - 0.01 * levelDelta);
+        specialTable.update(HK_Dodge, dodgeChance);
+        specialTable.update(HK_Crit, critChance);
     }
 
     void trySwordSpec() {
-        // TODO
-        // This resets the swing timer when it procs from a special attack
+        if (ctx.chance(0.01 * swordSpecLevel)) {
+            weaponSwing();
+        }
     }
 
     // Return weapon damage without any multipliers applied
-    double getWeaponDamage() {
-        return weaponDamageMin +
-               ctx.rand(weaponDamageMax - weaponDamageMin) +
-               ((attackPower / 14) * swingTime);
+    double getWeaponDamage(bool average = false) {
+        unsigned base = weaponDamageMin;
+        if (average) {
+            base += (weaponDamageMax - weaponDamageMin) / 2;
+        } else {
+            base += ctx.rand(weaponDamageMax - weaponDamageMin);
+        }
+        return base + ((attackPower / 14) * swingTime);
     }
 
     bool isMortalStrikeAvailable() const {
-        if (rage < 30)
+        if (rage < mortalStrikeCost)
             return false;
         if (events[EK_MortalStrikeCD] != DBL_MAX)
             return false;
@@ -228,7 +256,7 @@ struct DPS {
         return true;
     }
     bool isWhirlwindAvailable() const {
-        if (rage < 25)
+        if (rage < whirlwindCost)
             return false;
         if (events[EK_WhirlwindCD] != DBL_MAX)
             return false;
@@ -237,34 +265,65 @@ struct DPS {
         return true;
     }
 
+    void applyDeepWounds() {
+        deepWoundsTicks.start(*this);
+        deepWoundsTickDamage = getWeaponDamage(/*average=*/true) * (0.6 * 0.25);
+    }
+
+    void specialAttack(double bonusDamage) {
+        HitKind hk = specialTable.roll(ctx);
+        double mul = 0.0;
+        switch (hk) {
+        case HK_Miss:
+        case HK_Dodge:
+        case HK_Parry:
+            return;
+        case HK_Glance:
+            assert(0);
+            break;
+        case HK_Crit:
+            applyDeepWounds();
+            mul = specialCritMul;
+            break;
+        case HK_Hit:
+        case HK_Block:
+            mul = attackMul;
+            break;
+        }
+        double damage = (getWeaponDamage() + bonusDamage) * mul;
+        totalDamage += unsigned(damage);
+    }
+
+    // TODO overpower
     void trySpecialAttack() {
         if (isMortalStrikeAvailable()) {
             events[EK_MortalStrikeCD] = curTime + 6;
+            rage -= mortalStrikeCost;
+            specialAttack(160.0);
             trySwordSpec();
-            totalDamage += 100;
-            // TODO
         } else if (isWhirlwindAvailable()) {
             events[EK_WhirlwindCD] = curTime + 10;
-            //trySwordSpec(); ?????????
-            // TODO
+            rage -= whirlwindCost;
+            specialAttack(0.0);
+            // FIXME find out about this:
+            //trySwordSpec();
         }
     }
 
     void gainRage(unsigned r) {
-        rage += r;
+        rage = std::min(rage + r, 100U);
         trySpecialAttack();
     }
 
     void weaponSwing() {
-        events[EK_WeaponSwing] += swingTime;
+        events[EK_WeaponSwing] += curTime + swingTime;
 
-        HitKind ak = whiteTable.roll(ctx);
+        HitKind hk = whiteTable.roll(ctx);
         if (debug) {
-            std::cout << "    " << getHitKindName(ak) << "\n";
+            std::cout << "    " << getHitKindName(hk) << "\n";
         }
-        // TODO avoid multiplies at runtime by applying them doing them ahead of time
-        double mul;
-        switch (ak) {
+        double mul = 0.0;
+        switch (hk) {
         case HK_Miss:
         case HK_Dodge:
         case HK_Parry:
@@ -273,7 +332,7 @@ struct DPS {
             mul = glanceMul;
             break;
         case HK_Crit:
-            deepWoundsTicks.start(*this);
+            applyDeepWounds();
             mul = whiteCritMul;
             break;
         case HK_Hit:
@@ -307,16 +366,9 @@ void Tick<EK, NumTicks, Period>::tick(DPS &dps) {
 }
 
 void DPS::run() {
-    double weaponDamage = 100;
-    double swingDamage = weaponDamage;
-    // Apply attack power
-    swingDamage += ((attackPower / 14) * swingTime);
-
-    double mortalStrikeDamage = swingDamage + 160;
-    (void)mortalStrikeDamage;
-
     events[EK_WeaponSwing] = 0.0;
     events[EK_AngerManagement] = 0.0;
+
     while (curTime < 1 * 60 * 60) {
         EventKind curEvent;
         {
@@ -338,20 +390,20 @@ void DPS::run() {
         }
 
         switch (curEvent) {
-        case EK_WeaponSwing: {
+        case EK_WeaponSwing:
             weaponSwing();
             break;
-        }
         case EK_AngerManagement:
             events[curEvent] += 3;
             gainRage(1);
             break;
         case EK_DeepWoundsTick:
             deepWoundsTicks.tick(*this);
-            gainRage(1);
+            totalDamage += deepWoundsTickDamage;
             break;
         case EK_BloodrageTick:
             bloodrageTicks.tick(*this);
+            gainRage(1);
             break;
         case EK_MortalStrikeCD:
         case EK_WhirlwindCD:
@@ -373,3 +425,7 @@ int main() {
     DPS dps;
     dps.run();
 }
+
+// TODO
+// flurry
+// overpower
