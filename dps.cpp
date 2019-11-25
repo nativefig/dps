@@ -3,6 +3,8 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+
+#include <chrono>
 #include <iostream>
 #include <random>
 #include <vector>
@@ -73,20 +75,17 @@ const size_t NumHitKinds = 0
     ;
 ////////////////////////////////////////////////////////////////////////////////
 
-// TODO replace unsigned with size_t - should be faster?
-
+// TODO replace most uses of unsigned with size_t - should be faster?
 
 struct DPS;
 
 struct Context {
-    //std::random_device rd;
-    std::default_random_engine random;
-    std::uniform_int_distribution<unsigned> dist;
+    std::minstd_rand rng;
 
-    Context() : random(std::random_device()()) { }
+    Context() : rng(std::chrono::system_clock::now().time_since_epoch().count()) { }
 
     uint64_t rand() {
-        return dist(random);
+        return rng();
     }
     unsigned rand(unsigned x) {
         return (x * rand()) >> 32;
@@ -106,7 +105,7 @@ struct Tick {
     void tick(DPS &dps);
 };
 
-bool debug = true;
+bool verbose = false;
 
 // Constants ///////////////////////////////////////////////////////////////////
 unsigned mortalStrikeCost = 30;
@@ -116,14 +115,19 @@ unsigned whirlwindCost = 25;
 struct Params {
     bool frontAttack = false;
     bool dualWield = false;
-    unsigned enemyLevel = 60;
+    unsigned enemyLevel = 63;
     double armorMul = 0.66;
 
     // Stats
-    unsigned strength = 100;
+    // TODO this is error prone - everything should be using the values
+    // on the DPS class, it's easy to accidentally say p.strength instead
+    // of strength.
+    // Maybe prefix these with "gear"?
+    unsigned strength = 400;
+    unsigned agility = 50;
     unsigned bonusAttackPower = 100;
     unsigned hitBonus = 4;
-    unsigned critBonus = 5;
+    unsigned critBonus = 3;
 
     // Weapons
     double swingTime = 3.3;
@@ -147,20 +151,24 @@ struct AttackTable {
     uint64_t table[TableSize] = { 0 };
 
     void set(HitKind hk, double chance) {
-        assert(size_t(hk) < TableSize);
         if (chance < 0.0) {
             chance = 0.0;
         }
         assert(chance <= 1.0);
-        auto oldVal = table[hk];
-        auto newVal = uint64_t(chance * UINT_MAX);
+
+        const size_t idx = size_t(hk);
+        assert(idx < TableSize);
+
+        auto prev = idx == 0 ? 0 : table[idx - 1];
+        auto newVal = prev + uint64_t(chance * UINT_MAX);
+        auto delta = int64_t(newVal) - int64_t(table[idx]);
         table[hk] = newVal;
-        int64_t delta = newVal - oldVal;
-        for (size_t i = size_t(hk) + 1; i < TableSize; ++i) {
+        for (size_t i = idx + 1; i < TableSize; ++i) {
             table[i] += delta;
         }
     }
 
+    // TODO make this branchless
     HitKind roll(Context &ctx) {
         uint64_t roll = ctx.rand();
         size_t i;
@@ -170,29 +178,55 @@ struct AttackTable {
         }
         return HitKind(i);
     }
+
+    void print(std::ostream &out) const {
+        auto printRow = [this, &out](size_t i, double chance) {
+            out << "  " << getHitKindName(HitKind(i)) << ": " << chance << "\n";
+        };
+        size_t i;
+        uint64_t prev = 0;
+        out << "{\n";
+        for (i = 0; i < TableSize; ++i) {
+            auto cur = table[i];
+            printRow(i, double(cur - prev) / UINT_MAX);
+            prev = cur;
+        }
+        printRow(i, double(UINT_MAX - table[i - 1]) / UINT_MAX);
+        out << "}\n";
+    }
+    void dump() const;
 };
+void AttackTable::dump() const { print(std::cerr); }
 
 // TODO rename
 struct DPS {
-    const Params params;
+    const Params p;
 
-    const unsigned levelDelta = enemyLevel - 60;
-    const double attackMul = armorMul * (1.0 + 0.01 * twoHandSpecLevel);
+    const unsigned levelDelta = p.enemyLevel - 60;
+    const double attackMul = p.armorMul * (1.0 + 0.01 * p.twoHandSpecLevel);
     const double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
     const double whiteCritMul = 2.0 * attackMul;
-    const double specialCritMul = 2.0 + (impaleLevel * 0.1) * attackMul;
+    const double specialCritMul = 2.0 + (p.impaleLevel * 0.1) * attackMul;
+
+    unsigned strength = p.strength;
+    unsigned agility = p.agility;
+    unsigned bonusAttackPower = p.bonusAttackPower;
+    unsigned hitBonus = p.hitBonus;
+    unsigned critBonus = p.critBonus;
+
+    double swingTime = p.swingTime;
+
+    bool berserkerStance = true;
 
     // TODO make a typedef for the time type and define constants for not-scheduled
     double events[NumEventKinds];
     double curTime = 0.0;
     unsigned totalDamage = 0;
 
+    // TODO use fixed precision fraction type for this
     unsigned rage = 0;
 
-    // Round for each tick?
-    unsigned attackPower = (193 * (1.0 + 0.05 * improvedBattleShoutLevel))
-                           + strength * 2
-                           + bonusAttackPower;
+    // Round for each tick or not?
     unsigned deepWoundsTickDamage = 0;
 
     Tick<EK_DeepWoundsTick, 4, 3> deepWoundsTicks;
@@ -203,51 +237,70 @@ struct DPS {
     AttackTable whiteTable;
     AttackTable specialTable;
 
-    DPS(const Params &params) : params(params) { }
+    DPS(const Params &params) : p(params) {
         for (double &event : events) {
             event = DBL_MAX;
         }
 
         double dodgeChance = 0.05 + (levelDelta * 0.005);
-        // TODO when I implement overpower I'll need to add stance bonuses
-        double critChance = 0.05
-                            + 0.03 // Berserker stance
-                            + (0.01 * (crueltyLevel + axeSpecLevel))
-                            - (0.01 * levelDelta)
-                            - (levelDelta > 2 ? 0.018 : 0.0);
+        double specialMissChance = 0.05
+                                   + levelDelta * 0.01
+                                   + (levelDelta > 2 ? 0.01 : 0.0);
 
-        whiteTable.set(HK_Miss,
-                       0.05
-                       + levelDelta * 0.01
-                       + (levelDelta > 2 ? 0.1 : 0.0)
-                       + (dualWield ? 0.19 : 0.0));
+        whiteTable.set(HK_Miss, specialMissChance + (p.dualWield ? 0.19 : 0.0));
         whiteTable.set(HK_Dodge, dodgeChance);
         whiteTable.set(HK_Glance, 0.1 + 0.1 * levelDelta);
-        whiteTable.set(HK_Crit, critChance);
 
-        specialTable.set(HK_Miss,
-                         0.05
-                         + levelDelta * 0.01
-                         + (levelDelta > 2 ? 0.1 : 0.0));
+        specialTable.set(HK_Miss, specialMissChance);
         specialTable.set(HK_Dodge, dodgeChance);
-        specialTable.set(HK_Crit, critChance);
+
+        updateCritChance();
+
+        events[EK_WeaponSwing] = 0.0;
+        events[EK_AngerManagement] = 0.0;
+    }
+
+    void addDamage(double damage) {
+        if (verbose) { std::cerr << "    " << damage << " damage\n"; }
+        totalDamage += unsigned(damage);
+    }
+
+    // TODO how can we make sure that things like this stay in sync? E.g.
+    // any time agility is updated, this method must be called.
+    void updateCritChance() {
+        double ch = 0.05
+                    + (berserkerStance ? 0.03 : 0.0)
+                    + ((0.01 / 14) * agility) // FIXME 14 here is wrong
+                    + (0.01 * (p.crueltyLevel + p.axeSpecLevel))
+                    - (0.01 * levelDelta)
+                    - (levelDelta > 2 ? 0.018 : 0.0);
+
+        whiteTable.set(HK_Crit, ch);
+        specialTable.set(HK_Crit, ch);
+    }
+    double getAttackPower() const {
+        return strength * 2
+               + (193 * (1.0 + 0.05 * p.improvedBattleShoutLevel))
+               + bonusAttackPower;
     }
 
     void trySwordSpec() {
-        if (ctx.chance(0.01 * swordSpecLevel)) {
+        if (ctx.chance(0.01 * p.swordSpecLevel)) {
+            if (verbose) { std::cerr << "    Sword spec!\n"; }
             weaponSwing();
         }
     }
 
     // Return weapon damage without any multipliers applied
     double getWeaponDamage(bool average = false) {
-        unsigned base = weaponDamageMin;
+        double base = p.weaponDamageMin;
         if (average) {
-            base += (weaponDamageMax - weaponDamageMin) / 2;
+            base += double(p.weaponDamageMax - p.weaponDamageMin) / 2;
         } else {
-            base += ctx.rand(weaponDamageMax - weaponDamageMin);
+            base += ctx.rand(p.weaponDamageMax - p.weaponDamageMin);
         }
-        return base + ((attackPower / 14) * swingTime);
+        // TODO Should this be using base swing time or modified swing time? Surely base.
+        return base + ((getAttackPower() / 14) * p.swingTime);
     }
 
     bool isMortalStrikeAvailable() const {
@@ -294,18 +347,20 @@ struct DPS {
             mul = attackMul;
             break;
         }
-        double damage = (getWeaponDamage() + bonusDamage) * mul;
-        totalDamage += unsigned(damage);
+        if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
+        addDamage((getWeaponDamage() + bonusDamage) * mul);
     }
 
     // TODO overpower
     void trySpecialAttack() {
         if (isMortalStrikeAvailable()) {
+            if (verbose) { std::cerr << "    Mortal Strike\n"; }
             events[EK_MortalStrikeCD] = curTime + 6;
             rage -= mortalStrikeCost;
             specialAttack(160.0);
             trySwordSpec();
-        } else if (isWhirlwindAvailable()) {
+        } else if (isWhirlwindAvailable() && rage > 60) {
+            if (verbose) { std::cerr << "    Whirlwind\n"; }
             events[EK_WhirlwindCD] = curTime + 10;
             rage -= whirlwindCost;
             specialAttack(0.0);
@@ -316,16 +371,19 @@ struct DPS {
 
     void gainRage(unsigned r) {
         rage = std::min(rage + r, 100U);
+        if (verbose) { std::cerr << "    +" << r << " rage, " << rage << " total\n"; }
         trySpecialAttack();
     }
 
+    double getWeaponSwingRage(double damage) {
+        return damage / 30.7;
+    }
+
     void weaponSwing() {
-        events[EK_WeaponSwing] += curTime + swingTime;
+        events[EK_WeaponSwing] = curTime + swingTime;
 
         HitKind hk = whiteTable.roll(ctx);
-        if (debug) {
-            std::cout << "    " << getHitKindName(hk) << "\n";
-        }
+        if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
         double mul = 0.0;
         switch (hk) {
         case HK_Miss:
@@ -345,10 +403,10 @@ struct DPS {
             break;
         }
         double damage = getWeaponDamage() * mul;
-        totalDamage += unsigned(damage);
-        gainRage(10);
+        addDamage(damage);
+        gainRage(getWeaponSwingRage(damage));
     }
-    void run();
+    void run(double duration);
 };
 
 // TODO should this reset the tick time if it's already active?
@@ -369,11 +427,9 @@ void Tick<EK, NumTicks, Period>::tick(DPS &dps) {
     }
 }
 
-void DPS::run() {
-    events[EK_WeaponSwing] = 0.0;
-    events[EK_AngerManagement] = 0.0;
-
-    while (curTime < 1 * 60 * 60) {
+void DPS::run(double duration) {
+    double endTime = curTime + duration;
+    while (curTime < endTime) {
         EventKind curEvent;
         {
             size_t lowIndex = 0;
@@ -389,8 +445,8 @@ void DPS::run() {
             curTime = lowTime;
         }
 
-        if (debug) {
-            std::cout << curTime << " " << getEventName(curEvent) << "\n";
+        if (verbose) {
+            std::cerr << curTime << " " << getEventName(curEvent) << "\n";
         }
 
         switch (curEvent) {
@@ -403,7 +459,7 @@ void DPS::run() {
             break;
         case EK_DeepWoundsTick:
             deepWoundsTicks.tick(*this);
-            totalDamage += deepWoundsTickDamage;
+            addDamage(deepWoundsTickDamage);
             break;
         case EK_BloodrageTick:
             bloodrageTicks.tick(*this);
@@ -428,9 +484,12 @@ void DPS::run() {
 int main() {
     Params params;
     DPS dps(params);
-    dps.run();
+    double duration = 10 * 60 * 60;
+    dps.run(duration);
+    std::cout << "DPS: " << dps.totalDamage / duration << "\n";
 }
 
 // TODO
 // flurry
 // overpower
+// bloodthirst
