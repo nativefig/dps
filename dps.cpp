@@ -129,8 +129,8 @@ struct Params {
 
     // Weapons
     double swingTime = 3.3;
-    double weaponDamageMin = 100;
-    double weaponDamageMax = 200;
+    unsigned weaponDamageMin = 100;
+    unsigned weaponDamageMax = 200;
 
     // Talents
     unsigned twoHandSpecLevel = 3;
