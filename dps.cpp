@@ -15,9 +15,12 @@
     X(AngerManagement) \
     X(DeepWoundsTick) \
     X(BloodrageTick) \
+    X(OverpowerProcExpire) \
     X(MortalStrikeCD) \
     X(WhirlwindCD) \
+    X(OverpowerCD) \
     X(BloodrageCD) \
+    X(StanceCD) \
     X(GlobalCD)
 
 enum EventKind {
@@ -108,6 +111,10 @@ bool verbose = false;
 // Constants ///////////////////////////////////////////////////////////////////
 unsigned mortalStrikeCost = 30;
 unsigned whirlwindCost = 25;
+unsigned overpowerCost = 5;
+double globalCDDuration = 1.5;
+double stanceCDDuration = 1.5; // TODO is this right?
+double overpowerProcDuration = 5; // TODO is this right?
 ////////////////////////////////////////////////////////////////////////////////
 
 struct Params {
@@ -133,15 +140,22 @@ struct Params {
     unsigned weaponDamageMax = 200;
 
     // Talents
+    unsigned tacticalMasteryLevel = 5;
+    unsigned improvedOverpowerLevel = 2; // TODO
+    unsigned impaleLevel = 2;
     unsigned twoHandSpecLevel = 3;
     unsigned swordSpecLevel = 5;
     unsigned axeSpecLevel = 0;
-    unsigned impaleLevel = 2;
-    unsigned improvedBattleShoutLevel = 0;
-    unsigned crueltyLevel = 3;
-};
+    unsigned mortalStrikeLevel = 1; // TODO
 
-////////////////////////////////////////////////////////////////////////////////
+    unsigned crueltyLevel = 3;
+    unsigned improvedBattleShoutLevel = 0;
+    unsigned unbridledWrathLevel = 0; // TODO
+    unsigned dualWieldSpecLevel = 0; // TODO
+    unsigned flurryLevel = 0; // TODO
+    unsigned improvedBerserkerRageLevel = 0; // TODO
+    unsigned bloodthirstLevel = 0; // TODO
+};
 
 struct AttackTable {
     static const size_t TableSize = NumHitKinds - 1;
@@ -277,6 +291,29 @@ struct DPS {
         events[EK_BloodrageCD] = 0.0;
     }
 
+    bool isActive(EventKind ek) const {
+        return events[ek] != DBL_MAX;
+    }
+    void clear(EventKind ek) {
+        events[ek] = DBL_MAX;
+    }
+
+    void swapStance() {
+        if (verbose) {
+            std::cerr << "    " << (berserkerStance ? "Battle" : "Berserker") << " stance\n";
+        }
+        assert(!isActive(EK_StanceCD));
+        events[EK_StanceCD] = curTime + stanceCDDuration;
+        berserkerStance = !berserkerStance;
+        updateCritChance();
+        rage = std::min(rage, 5 * p.tacticalMasteryLevel);
+    }
+    void trySwapStance() {
+        if (!isActive(EK_StanceCD)) {
+            swapStance();
+        }
+    }
+
     void addDamage(double damage) {
         if (verbose) { std::cerr << "    " << damage << " damage\n"; }
         totalDamage += uint64_t(damage);
@@ -287,7 +324,7 @@ struct DPS {
     void updateCritChance() {
         double ch = 0.05
                     + (berserkerStance ? 0.03 : 0.0)
-                    + ((0.01 / 14) * agility) // FIXME 14 here is wrong
+                    + ((0.01 / 20) * agility)
                     + (0.01 * (p.crueltyLevel + p.axeSpecLevel))
                     - (0.01 * levelDelta)
                     - (levelDelta > 2 ? 0.018 : 0.0);
@@ -324,18 +361,30 @@ struct DPS {
     bool isMortalStrikeAvailable() const {
         if (rage < mortalStrikeCost)
             return false;
-        if (events[EK_MortalStrikeCD] != DBL_MAX)
+        if (isActive(EK_MortalStrikeCD))
             return false;
-        if (events[EK_GlobalCD] != DBL_MAX)
+        if (isActive(EK_GlobalCD))
             return false;
         return true;
     }
     bool isWhirlwindAvailable() const {
         if (rage < whirlwindCost)
             return false;
-        if (events[EK_WhirlwindCD] != DBL_MAX)
+        if (isActive(EK_WhirlwindCD))
             return false;
-        if (events[EK_GlobalCD] != DBL_MAX)
+        if (isActive(EK_GlobalCD))
+            return false;
+        return true;
+    }
+    // Note: doesn't account for stance
+    bool isOverpowerAvailable() const {
+        if (rage < overpowerCost)
+            return false;
+        if (isActive(EK_OverpowerCD))
+            return false;
+        if (isActive(EK_GlobalCD))
+            return false;
+        if (!isActive(EK_OverpowerProcExpire))
             return false;
         return true;
     }
@@ -345,13 +394,17 @@ struct DPS {
         deepWoundsTickDamage = getWeaponDamage(/*average=*/true) * (0.6 * 0.25);
     }
 
+    // TODO work out how rage refund works for miss/dodge/parry
     void specialAttack(double bonusDamage) {
+        events[EK_GlobalCD] = curTime + globalCDDuration;
         HitKind hk = specialTable.roll(ctx);
         double mul = 0.0;
         switch (hk) {
         case HK_Miss:
-        case HK_Dodge:
         case HK_Parry:
+            return;
+        case HK_Dodge:
+            events[EK_OverpowerProcExpire] = curTime + overpowerProcDuration;
             return;
         case HK_Glance:
             assert(0);
@@ -369,21 +422,35 @@ struct DPS {
         addDamage((getWeaponDamage() + bonusDamage) * mul);
     }
 
-    // TODO overpower
     void trySpecialAttack() {
+        // FIXME GCD gets checked 3 times here - optimise?
         if (isMortalStrikeAvailable()) {
             if (verbose) { std::cerr << "    Mortal Strike\n"; }
             events[EK_MortalStrikeCD] = curTime + 6;
             rage -= mortalStrikeCost;
-            specialAttack(160.0);
+            specialAttack(160);
             trySwordSpec();
-        } else if (isWhirlwindAvailable() && rage > 60) {
+        } else if (isWhirlwindAvailable() && rage > 50) {
             if (verbose) { std::cerr << "    Whirlwind\n"; }
             events[EK_WhirlwindCD] = curTime + 10;
             rage -= whirlwindCost;
-            specialAttack(0.0);
+            specialAttack(0);
             // FIXME find out about this:
             //trySwordSpec();
+        } else if (isOverpowerAvailable()) {
+            // TODO use whirlwind if possible before stance swap
+            if (berserkerStance) {
+                trySwapStance();
+            }
+            if (!berserkerStance) {
+                if (verbose) { std::cerr << "    Overpower\n"; }
+                events[EK_OverpowerCD] = curTime + 5;
+                clear(EK_OverpowerProcExpire);
+                rage -= overpowerCost;
+                // TODO special modifiers - +crit chance, no dodge or parry
+                specialAttack(35);
+                trySwapStance();
+            }
         }
     }
 
@@ -405,8 +472,11 @@ struct DPS {
         double mul = 0.0;
         switch (hk) {
         case HK_Miss:
-        case HK_Dodge:
         case HK_Parry:
+            return;
+        case HK_Dodge:
+            events[EK_OverpowerProcExpire] = curTime + overpowerProcDuration;
+            trySpecialAttack();
             return;
         case HK_Glance:
             mul = glanceMul;
@@ -441,7 +511,7 @@ void Tick<EK, NumTicks, Period>::tick(DPS &dps) {
     if (ticks) {
         dps.events[EK] += Period;
     } else {
-        dps.events[EK] = DBL_MAX;
+        dps.clear(EK);
     }
 }
 
@@ -485,8 +555,9 @@ void DPS::run(double duration) {
             break;
         case EK_MortalStrikeCD:
         case EK_WhirlwindCD:
+        case EK_OverpowerCD:
         case EK_GlobalCD:
-            events[curEvent] += DBL_MAX;
+            clear(curEvent);
             trySpecialAttack();
             break;
         case EK_BloodrageCD:
@@ -495,6 +566,20 @@ void DPS::run(double duration) {
             gainRage(10);
             bloodrageTicks.start(*this);
             break;
+        case EK_OverpowerProcExpire:
+            clear(curEvent);
+            if (!berserkerStance) {
+                trySwapStance();
+            }
+            break;
+        case EK_StanceCD:
+            clear(curEvent);
+            if (berserkerStance) {
+                trySpecialAttack();
+            } else if (!isActive(EK_OverpowerProcExpire)) {
+                swapStance();
+            }
+            break;
         }
     }
 }
@@ -502,7 +587,7 @@ void DPS::run(double duration) {
 int main() {
     Params params;
     DPS dps(params);
-    double duration = 100 * 60 * 60;
+    double duration = 10 * 60 * 60;
     dps.run(duration);
     std::cout << "DPS: " << dps.totalDamage / duration << "\n";
     if (verbose) {
