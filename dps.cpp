@@ -77,26 +77,24 @@ const size_t NumHitKinds = 0
 
 // TODO replace most uses of unsigned with size_t - should be faster?
 
-struct DPS;
+using RNG = std::minstd_rand;
 
 struct Context {
-    std::minstd_rand rng;
+    RNG rng;
 
     Context() : rng(std::chrono::system_clock::now().time_since_epoch().count()) { }
 
     uint64_t rand() {
         return rng();
     }
-    unsigned rand(unsigned x) {
-        return (x * rand()) >> 32;
-    }
     bool chance(double ch) {
         if (ch >= 1.0)
             return true;
-        return uint64_t(ch * UINT_MAX) > rand();
+        return uint64_t(ch * RNG::max()) > rand();
     }
 };
 
+struct DPS;
 template <EventKind EK, unsigned NumTicks, unsigned Period>
 struct Tick {
     unsigned ticks = 0;
@@ -149,6 +147,7 @@ struct AttackTable {
     static const size_t TableSize = NumHitKinds - 1;
 
     uint64_t table[TableSize] = { 0 };
+    size_t counts[NumHitKinds] = { 0 };
 
     void set(HitKind hk, double chance) {
         if (chance < 0.0) {
@@ -159,8 +158,8 @@ struct AttackTable {
         const size_t idx = size_t(hk);
         assert(idx < TableSize);
 
-        auto prev = idx == 0 ? 0 : table[idx - 1];
-        auto newVal = prev + uint64_t(chance * UINT_MAX);
+        auto prev = idx == 0 ? RNG::min() : table[idx - 1];
+        auto newVal = prev + uint64_t(chance * (RNG::max() - RNG::min()));
         auto delta = int64_t(newVal) - int64_t(table[idx]);
         table[hk] = newVal;
         for (size_t i = idx + 1; i < TableSize; ++i) {
@@ -168,14 +167,14 @@ struct AttackTable {
         }
     }
 
-    // TODO make this branchless
     HitKind roll(Context &ctx) {
         uint64_t roll = ctx.rand();
         size_t i;
         for (i = 0; i < TableSize; ++i) {
-            if (table[i] > roll)
+            if (roll < table[i])
                 break;
         }
+        ++(counts[i]);
         return HitKind(i);
     }
 
@@ -184,14 +183,26 @@ struct AttackTable {
             out << "  " << getHitKindName(HitKind(i)) << ": " << chance << "\n";
         };
         size_t i;
-        uint64_t prev = 0;
+        uint64_t prev = RNG::min();
         out << "{\n";
         for (i = 0; i < TableSize; ++i) {
             auto cur = table[i];
-            printRow(i, double(cur - prev) / UINT_MAX);
+            printRow(i, double(cur - prev) / RNG::max());
             prev = cur;
         }
-        printRow(i, double(UINT_MAX - table[i - 1]) / UINT_MAX);
+        printRow(i, double(RNG::max() - table[i - 1]) / RNG::max());
+        out << "}\n";
+    }
+    void printStats(std::ostream &out) const {
+        size_t total = 0;
+        for (size_t count : counts) {
+            total += count;
+        }
+        out << "{\n";
+        for (size_t i = 0; i < NumHitKinds; ++i) {
+            out << "  " << getHitKindName(HitKind(i)) << ": "
+                        << (double(counts[i]) / total) << "\n";
+        }
         out << "}\n";
     }
     void dump() const;
@@ -221,7 +232,7 @@ struct DPS {
     // TODO make a typedef for the time type and define constants for not-scheduled
     double events[NumEventKinds];
     double curTime = 0.0;
-    unsigned totalDamage = 0;
+    uint64_t totalDamage = 0;
 
     // TODO use fixed precision fraction type for this
     unsigned rage = 0;
@@ -234,10 +245,15 @@ struct DPS {
 
     Context ctx;
 
+    std::uniform_int_distribution<unsigned> weaponDamageDist;
+
     AttackTable whiteTable;
     AttackTable specialTable;
 
-    DPS(const Params &params) : p(params) {
+    DPS(const Params &params) :
+        p(params),
+        weaponDamageDist(p.weaponDamageMin, p.weaponDamageMax) {
+
         for (double &event : events) {
             event = DBL_MAX;
         }
@@ -258,11 +274,12 @@ struct DPS {
 
         events[EK_WeaponSwing] = 0.0;
         events[EK_AngerManagement] = 0.0;
+        events[EK_BloodrageCD] = 0.0;
     }
 
     void addDamage(double damage) {
         if (verbose) { std::cerr << "    " << damage << " damage\n"; }
-        totalDamage += unsigned(damage);
+        totalDamage += uint64_t(damage);
     }
 
     // TODO how can we make sure that things like this stay in sync? E.g.
@@ -293,11 +310,12 @@ struct DPS {
 
     // Return weapon damage without any multipliers applied
     double getWeaponDamage(bool average = false) {
-        double base = p.weaponDamageMin;
+        double base;
         if (average) {
-            base += double(p.weaponDamageMax - p.weaponDamageMin) / 2;
+            base = p.weaponDamageMin +
+                    double(p.weaponDamageMax - p.weaponDamageMin) / 2;
         } else {
-            base += ctx.rand(p.weaponDamageMax - p.weaponDamageMin);
+            base = weaponDamageDist(ctx.rng);
         }
         // TODO Should this be using base swing time or modified swing time? Surely base.
         return base + ((getAttackPower() / 14) * p.swingTime);
@@ -484,9 +502,13 @@ void DPS::run(double duration) {
 int main() {
     Params params;
     DPS dps(params);
-    double duration = 10 * 60 * 60;
+    double duration = 100 * 60 * 60;
     dps.run(duration);
     std::cout << "DPS: " << dps.totalDamage / duration << "\n";
+    if (verbose) {
+        dps.whiteTable.print(std::cerr);
+        dps.whiteTable.printStats(std::cerr);
+    }
 }
 
 // TODO
