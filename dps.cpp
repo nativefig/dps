@@ -3,24 +3,26 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <random>
-#include <vector>
+#include <string>
 
 ////////////////////////////////////////////////////////////////////////////////
-#define EVENT_LIST \
-    X(WeaponSwing) \
-    X(AngerManagement) \
-    X(DeepWoundsTick) \
-    X(BloodrageTick) \
-    X(OverpowerProcExpire) \
-    X(MortalStrikeCD) \
-    X(WhirlwindCD) \
-    X(OverpowerCD) \
-    X(BloodrageCD) \
-    X(StanceCD) \
+#define EVENT_LIST                                                             \
+    X(WeaponSwing)                                                             \
+    X(AngerManagement)                                                         \
+    X(DeepWoundsTick)                                                          \
+    X(BloodrageTick)                                                           \
+    X(OverpowerProcExpire)                                                     \
+    X(MortalStrikeCD)                                                          \
+    X(WhirlwindCD)                                                             \
+    X(OverpowerCD)                                                             \
+    X(BloodrageCD)                                                             \
+    X(StanceCD)                                                                \
     X(GlobalCD)
 
 enum EventKind {
@@ -47,13 +49,13 @@ const size_t NumEventKinds = 0
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////
-#define HIT_KIND_LIST \
-    X(Miss) \
-    X(Dodge) \
-    X(Parry) \
-    X(Glance) \
-    X(Block) \
-    X(Crit) \
+#define HIT_KIND_LIST                                                          \
+    X(Miss)                                                                    \
+    X(Dodge)                                                                   \
+    X(Parry)                                                                   \
+    X(Glance)                                                                  \
+    X(Block)                                                                   \
+    X(Crit)                                                                    \
     X(Hit)
 
 enum HitKind {
@@ -117,45 +119,53 @@ double stanceCDDuration = 1.5; // TODO is this right?
 double overpowerProcDuration = 5; // TODO is this right?
 ////////////////////////////////////////////////////////////////////////////////
 
+// Params //////////////////////////////////////////////////////////////////////
+#define PARAM_LIST                                                             \
+    X(frontAttack, bool, false)                                                \
+    X(dualWield, bool, false)                                                  \
+    X(enemyLevel, unsigned, 63)                                                \
+    X(armorMul, double, 0.66)                                                  \
+                                                                               \
+    /* Stats */                                                                \
+                                                                               \
+    X(strength, unsigned, 400)                                                 \
+    X(agility, unsigned, 50)                                                   \
+    X(bonusAttackPower, unsigned, 100)                                         \
+    X(hitBonus, unsigned, 4)                                                   \
+    X(critBonus, unsigned, 3)                                                  \
+                                                                               \
+    /* Weapons */                                                              \
+                                                                               \
+    X(swingTime, double, 3.3)                                                  \
+    X(weaponDamageMin, unsigned, 100)                                          \
+    X(weaponDamageMax, unsigned, 200)                                          \
+                                                                               \
+    /* Arms talents */                                                         \
+                                                                               \
+    X(tacticalMasteryLevel, unsigned, 5)                                       \
+    X(improvedOverpowerLevel, unsigned, 2)                                     \
+    X(impaleLevel, unsigned, 2)                                                \
+    X(twoHandSpecLevel, unsigned, 3)                                           \
+    X(swordSpecLevel, unsigned, 5)                                             \
+    X(axeSpecLevel, unsigned, 0)                                               \
+    X(mortalStrikeLevel, unsigned, 1)                                          \
+                                                                               \
+    /* Fury talents */                                                         \
+                                                                               \
+    X(crueltyLevel, unsigned, 3)                                               \
+    X(improvedBattleShoutLevel, unsigned, 0)                                   \
+    X(unbridledWrathLevel, unsigned, 0)                                        \
+    X(dualWieldSpecLevel, unsigned, 0)                                         \
+    X(flurryLevel, unsigned, 0)                                                \
+    X(improvedBerserkerRageLevel, unsigned, 0)                                 \
+    X(bloodthirstLevel, unsigned, 0)                                           \
+
 struct Params {
-    bool frontAttack = false;
-    bool dualWield = false;
-    unsigned enemyLevel = 63;
-    double armorMul = 0.66;
-
-    // Stats
-    // TODO this is error prone - everything should be using the values
-    // on the DPS class, it's easy to accidentally say p.strength instead
-    // of strength.
-    // Maybe prefix these with "gear"?
-    unsigned strength = 400;
-    unsigned agility = 50;
-    unsigned bonusAttackPower = 100;
-    unsigned hitBonus = 4;
-    unsigned critBonus = 3;
-
-    // Weapons
-    double swingTime = 3.3;
-    unsigned weaponDamageMin = 100;
-    unsigned weaponDamageMax = 200;
-
-    // Talents
-    unsigned tacticalMasteryLevel = 5;
-    unsigned improvedOverpowerLevel = 2; // TODO
-    unsigned impaleLevel = 2;
-    unsigned twoHandSpecLevel = 3;
-    unsigned swordSpecLevel = 5;
-    unsigned axeSpecLevel = 0;
-    unsigned mortalStrikeLevel = 1; // TODO
-
-    unsigned crueltyLevel = 3;
-    unsigned improvedBattleShoutLevel = 0;
-    unsigned unbridledWrathLevel = 0; // TODO
-    unsigned dualWieldSpecLevel = 0; // TODO
-    unsigned flurryLevel = 0; // TODO
-    unsigned improvedBerserkerRageLevel = 0; // TODO
-    unsigned bloodthirstLevel = 0; // TODO
+    #define X(NAME, TYPE, VALUE) TYPE NAME = VALUE;
+    PARAM_LIST
+    #undef X
 };
+////////////////////////////////////////////////////////////////////////////////
 
 struct AttackTable {
     static const size_t TableSize = NumHitKinds - 1;
@@ -584,10 +594,124 @@ void DPS::run(double duration) {
     }
 }
 
-int main() {
+class StrView {
+    const char *ptr;
+    size_t len;
+
+    // Avoid undefined memcmp behaviour when len == 0
+    static bool memEqual(const char *a, const char *b, size_t n) {
+        return n == 0 || ::memcmp(a, b, n) == 0;
+    }
+
+public:
+    static const size_t npos = ~size_t(0);
+
+    StrView() : ptr(nullptr), len(0) { }
+    StrView(const char *data, size_t size) : ptr(data), len(size) { }
+    StrView(const std::string &str) : ptr(str.data()), len(str.size()) { }
+    StrView(const char *str) : ptr(str), len(::strlen(str)) { }
+
+    const char *data() const { return ptr; }
+    bool empty() const { return len == 0; }
+    size_t size() const { return len; }
+    const char *begin() const { return ptr; }
+    const char *end() const { return ptr + len; }
+    char operator[](size_t i) const { return ptr[i]; }
+
+    StrView substr(size_t start, size_t n = npos) const {
+        start = std::min(start, len);
+        return StrView(ptr + start, std::min(n, len - start));
+    }
+
+    bool startswith(StrView prefix) const {
+        return len >= prefix.len && memEqual(ptr, prefix.ptr, prefix.len);
+    }
+
+    bool operator==(StrView that) const {
+        return len == that.len && memEqual(ptr, that.ptr, len);
+    }
+    bool operator!=(StrView that) const { return !(*this == that); }
+
+    size_t find(char ch) const {
+        for (size_t i = 0; i < len; ++i) {
+            if (ptr[i] == ch)
+                return i;
+        }
+        return npos;
+    }
+
+    std::string str() const { return len ? std::string(ptr, len) : std::string(); }
+    operator std::string() const { return str(); }
+};
+
+std::ostream &operator<<(std::ostream &out, StrView str) {
+    out.write(str.data(), str.size());
+    return out;
+}
+
+void parseParam(StrView str, double &out, StrView param) {
+    char *end = nullptr;
+    double tmp = std::strtod(str.data(), &end);
+    if (end != str.end()) {
+        std::cerr << "Invalid value '" << str << "' for param '"
+                  << param << "'. Expected decimal.";
+        exit(1);
+    }
+    out = tmp;
+}
+void parseParam(StrView str, unsigned &out, StrView param) {
+    char *end = nullptr;
+    unsigned long tmp = strtoul(str.data(), &end, 10);
+    if (end != str.end() || tmp != unsigned(tmp)) {
+        std::cerr << "Invalid value '" << str << "' for param '"
+                  << param << "'. Expected unsigned integer.\n";
+        exit(1);
+    }
+    out = unsigned(tmp);
+}
+void parseParam(StrView str, bool &out, StrView param) {
+    if (str == "1") {
+        out = true;
+    } else if (str == "0") {
+        out = false;
+    } else {
+        std::cerr << "Invalid value '" << str << "' for param '"
+                  << param << "'. Expected 0 or 1.\n";
+        exit(1);
+    }
+}
+
+void parseParamArg(Params &params, StrView str) {
+    auto eq = str.find('=');
+    if (eq == StrView::npos) {
+        std::cerr << "Invalid argument '" << str << "'\n";
+        exit(1);
+    }
+    StrView name = str.substr(0, eq);
+    StrView valStr = str.substr(eq + 1);
+
+    if (false) {
+    }
+    #define X(NAME, TYPE, VALUE)                   \
+        else if (name == #NAME) {                  \
+            parseParam(valStr, params.NAME, name); \
+        }
+    PARAM_LIST
+    #undef X
+    else {
+        std::cerr << "Invalid param name '" << name << "'\n";
+        exit(1);
+    }
+}
+
+int main(int argc, char **argv) {
     Params params;
+    for (int i = 1; i < argc; ++i) {
+        parseParamArg(params, argv[i]);
+    }
+
     DPS dps(params);
-    double duration = 10 * 60 * 60;
+    double duration = 10 * 60 * 60; // TODO make this an option
     dps.run(duration);
     std::cout << "DPS: " << dps.totalDamage / duration << "\n";
     if (verbose) {
