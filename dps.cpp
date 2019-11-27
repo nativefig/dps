@@ -13,7 +13,8 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 #define EVENT_LIST                                                             \
-    X(WeaponSwing)                                                             \
+    X(MainSwing)                                                               \
+    X(OffSwing)                                                                \
     X(AngerManagement)                                                         \
     X(DeepWoundsTick)                                                          \
     X(BloodrageTick)                                                           \
@@ -138,9 +139,13 @@ double overpowerProcDuration = 5; // TODO is this right?
                                                                                \
     /* Weapons */                                                              \
                                                                                \
-    X(swingTime, double, 3.3)                                                  \
-    X(weaponDamageMin, unsigned, 100)                                          \
-    X(weaponDamageMax, unsigned, 200)                                          \
+    X(mainSwingTime, double, 3.3)                                              \
+    X(mainWeaponDamageMin, unsigned, 100)                                      \
+    X(mainWeaponDamageMax, unsigned, 200)                                      \
+                                                                               \
+    X(offSwingTime, double, 3.3)                                               \
+    X(offWeaponDamageMin, unsigned, 100)                                       \
+    X(offWeaponDamageMax, unsigned, 200)                                       \
                                                                                \
     /* Arms talents */                                                         \
                                                                                \
@@ -251,7 +256,8 @@ struct DPS {
     unsigned hitBonus = p.hitBonus;
     unsigned critBonus = p.critBonus;
 
-    double swingTime = p.swingTime;
+    double mainSwingTime = p.mainSwingTime;
+    double offSwingTime = p.offSwingTime;
 
     bool berserkerStance = true;
 
@@ -271,14 +277,16 @@ struct DPS {
 
     Context ctx;
 
-    std::uniform_int_distribution<unsigned> weaponDamageDist;
+    std::uniform_int_distribution<unsigned> mainWeaponDamageDist;
+    std::uniform_int_distribution<unsigned> offWeaponDamageDist;
 
     AttackTable whiteTable;
     AttackTable specialTable;
 
     DPS(const Params &params) :
         p(params),
-        weaponDamageDist(p.weaponDamageMin, p.weaponDamageMax) {
+        mainWeaponDamageDist(p.mainWeaponDamageMin, p.mainWeaponDamageMax),
+        offWeaponDamageDist(p.offWeaponDamageMin, p.offWeaponDamageMax) {
 
         for (double &event : events) {
             event = DBL_MAX;
@@ -298,7 +306,10 @@ struct DPS {
 
         updateCritChance();
 
-        events[EK_WeaponSwing] = 0.0;
+        events[EK_MainSwing] = 0.0;
+        if (p.dualWield) {
+            events[EK_OffSwing] = 0.0;
+        }
         events[EK_AngerManagement] = 0.0;
         events[EK_BloodrageCD] = 0.0;
     }
@@ -358,16 +369,20 @@ struct DPS {
     }
 
     // Return weapon damage without any multipliers applied
-    double getWeaponDamage(bool average = false) {
+    // TODO How does deep wounds work with offhand crits?
+    double getWeaponDamage(bool main = true, bool average = false) {
+        auto min = main ? p.mainWeaponDamageMin : p.offWeaponDamageMin;
+        auto max = main ? p.mainWeaponDamageMax : p.offWeaponDamageMax;
+        auto &dist = main ? mainWeaponDamageDist : offWeaponDamageDist;
+        // TODO Should this be using base swing time or modified swing time? Surely base.
+        auto swingTime = main ? p.mainSwingTime : p.offSwingTime;
         double base;
         if (average) {
-            base = p.weaponDamageMin +
-                    double(p.weaponDamageMax - p.weaponDamageMin) / 2;
+            base = min + double(max - min) / 2;
         } else {
-            base = weaponDamageDist(ctx.rng);
+            base = dist(ctx.rng);
         }
-        // TODO Should this be using base swing time or modified swing time? Surely base.
-        return base + ((getAttackPower() / 14) * p.swingTime);
+        return base + ((getAttackPower() / 14) * swingTime);
     }
 
     bool isMortalStrikeAvailable() const {
@@ -416,7 +431,7 @@ struct DPS {
 
     void applyDeepWounds() {
         deepWoundsTicks.start(*this);
-        deepWoundsTickDamage = getWeaponDamage(/*average=*/true) * (0.6 * 0.25);
+        deepWoundsTickDamage = getWeaponDamage(true, /*average=*/true) * (0.6 * 0.25);
     }
 
     // TODO work out how rage refund works for miss/dodge/parry
@@ -502,8 +517,8 @@ struct DPS {
         return damage / 30.7;
     }
 
-    void weaponSwing() {
-        events[EK_WeaponSwing] = curTime + swingTime;
+    void weaponSwing(bool main = true) {
+        events[EK_MainSwing] = curTime + (main ? mainSwingTime : offSwingTime);
 
         HitKind hk = whiteTable.roll(ctx);
         if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
@@ -528,7 +543,7 @@ struct DPS {
             mul = attackMul;
             break;
         }
-        double damage = getWeaponDamage() * mul;
+        double damage = getWeaponDamage(main) * mul;
         addDamage(damage);
         gainRage(getWeaponSwingRage(damage));
     }
@@ -576,8 +591,11 @@ void DPS::run(double duration) {
         }
 
         switch (curEvent) {
-        case EK_WeaponSwing:
-            weaponSwing();
+        case EK_MainSwing:
+            weaponSwing(true);
+            break;
+        case EK_OffSwing:
+            weaponSwing(false);
             break;
         case EK_AngerManagement:
             events[curEvent] += 3;
@@ -750,4 +768,3 @@ int main(int argc, char **argv) {
 // TODO
 // flurry
 // overpower
-// bloodthirst
