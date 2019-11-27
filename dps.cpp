@@ -178,7 +178,7 @@ struct AttackTable {
     static const size_t TableSize = NumHitKinds - 1;
 
     uint64_t table[TableSize] = { 0 };
-    size_t counts[NumHitKinds] = { 0 };
+    //size_t counts[NumHitKinds] = { 0 };
 
     void set(HitKind hk, double chance) {
         if (chance < 0.0) {
@@ -198,14 +198,14 @@ struct AttackTable {
         }
     }
 
-    HitKind roll(Context &ctx) {
+    HitKind roll(Context &ctx) const {
         uint64_t roll = ctx.rand();
         size_t i;
         for (i = 0; i < TableSize; ++i) {
             if (roll < table[i])
                 break;
         }
-        ++(counts[i]);
+        //++(counts[i]);
         return HitKind(i);
     }
 
@@ -225,6 +225,9 @@ struct AttackTable {
         out << "}\n";
     }
     void printStats(std::ostream &out) const {
+        (void)out;
+        // TODO store these elsewhere
+#if 0
         size_t total = 0;
         for (size_t count : counts) {
             total += count;
@@ -235,6 +238,7 @@ struct AttackTable {
                         << (double(counts[i]) / total) << "\n";
         }
         out << "}\n";
+#endif
     }
     void dump() const;
 };
@@ -342,16 +346,19 @@ struct DPS {
         totalDamage += uint64_t(damage);
     }
 
+    double getCritChance() const {
+        return 0.05
+               + (berserkerStance ? 0.03 : 0.0)
+               + ((0.01 / 20) * agility)
+               + (0.01 * (p.crueltyLevel + p.axeSpecLevel))
+               - (0.01 * levelDelta)
+               - (levelDelta > 2 ? 0.018 : 0.0);
+    }
+
     // TODO how can we make sure that things like this stay in sync? E.g.
     // any time agility is updated, this method must be called.
     void updateCritChance() {
-        double ch = 0.05
-                    + (berserkerStance ? 0.03 : 0.0)
-                    + ((0.01 / 20) * agility)
-                    + (0.01 * (p.crueltyLevel + p.axeSpecLevel))
-                    - (0.01 * levelDelta)
-                    - (levelDelta > 2 ? 0.018 : 0.0);
-
+        double ch = getCritChance();
         whiteTable.set(HK_Crit, ch);
         specialTable.set(HK_Crit, ch);
     }
@@ -436,11 +443,12 @@ struct DPS {
 
     // TODO work out how rage refund works for miss/dodge/parry
     template <class AttackCallback>
-    void specialAttack(unsigned cost, AttackCallback &&attack) {
+    void specialAttack(unsigned cost, const AttackTable &table,
+                       AttackCallback &&attack) {
         assert(rage >= cost);
         rage -= cost;
         events[EK_GlobalCD] = curTime + globalCDDuration;
-        HitKind hk = specialTable.roll(ctx);
+        HitKind hk = table.roll(ctx);
         double mul = 0.0;
         switch (hk) {
         case HK_Miss:
@@ -470,21 +478,24 @@ struct DPS {
         if (isMortalStrikeAvailable()) {
             if (verbose) { std::cerr << "    Mortal Strike\n"; }
             events[EK_MortalStrikeCD] = curTime + 6;
-            specialAttack(mortalStrikeCost, [this](double mul) {
+            specialAttack(mortalStrikeCost, specialTable,
+                          [this](double mul) {
                 addDamage((getWeaponDamage() + 160) * mul);
             });
             trySwordSpec();
         } else if (isBloodthirstAvailable()) {
             if (verbose) { std::cerr << "    Bloodthirst\n"; }
             events[EK_BloodthirstCD] = curTime + 6;
-            specialAttack(bloodthirstCost, [this](double mul) {
+            specialAttack(bloodthirstCost, specialTable,
+                          [this](double mul) {
                 addDamage(getAttackPower() * mul);
             });
         } else if (isWhirlwindAvailable() && rage > 50) {
             // TODO only available in serker stance
             if (verbose) { std::cerr << "    Whirlwind\n"; }
             events[EK_WhirlwindCD] = curTime + 10;
-            specialAttack(whirlwindCost, [this](double mul) {
+            specialAttack(whirlwindCost, specialTable,
+                          [this](double mul) {
                 addDamage(getWeaponDamage() * mul);
             });
             // FIXME find out about this:
@@ -498,8 +509,14 @@ struct DPS {
                 if (verbose) { std::cerr << "    Overpower\n"; }
                 events[EK_OverpowerCD] = curTime + 5;
                 clear(EK_OverpowerProcExpire);
-                // TODO special modifiers - +crit chance, no dodge or parry
-                specialAttack(overpowerCost, [this](double mul) {
+                AttackTable table = specialTable;
+                table.set(HK_Dodge, 0);
+                table.set(HK_Parry, 0);
+                if (p.improvedOverpowerLevel) {
+                    table.set(HK_Crit, getCritChance() + 0.25 * p.improvedOverpowerLevel);
+                }
+                specialAttack(overpowerCost, table,
+                              [this](double mul) {
                     addDamage((getWeaponDamage() + 35) * mul);
                 });
                 trySwapStance();
