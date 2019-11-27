@@ -19,6 +19,7 @@
     X(BloodrageTick)                                                           \
     X(OverpowerProcExpire)                                                     \
     X(MortalStrikeCD)                                                          \
+    X(BloodthirstCD)                                                           \
     X(WhirlwindCD)                                                             \
     X(OverpowerCD)                                                             \
     X(BloodrageCD)                                                             \
@@ -112,6 +113,7 @@ bool verbose = false;
 
 // Constants ///////////////////////////////////////////////////////////////////
 unsigned mortalStrikeCost = 30;
+unsigned bloodthirstCost = 30;
 unsigned whirlwindCost = 25;
 unsigned overpowerCost = 5;
 double globalCDDuration = 1.5;
@@ -369,9 +371,22 @@ struct DPS {
     }
 
     bool isMortalStrikeAvailable() const {
+        if (!p.mortalStrikeLevel)
+            return false;
         if (rage < mortalStrikeCost)
             return false;
         if (isActive(EK_MortalStrikeCD))
+            return false;
+        if (isActive(EK_GlobalCD))
+            return false;
+        return true;
+    }
+    bool isBloodthirstAvailable() const {
+        if (!p.bloodthirstLevel)
+            return false;
+        if (rage < bloodthirstCost)
+            return false;
+        if (isActive(EK_BloodthirstCD))
             return false;
         if (isActive(EK_GlobalCD))
             return false;
@@ -405,7 +420,10 @@ struct DPS {
     }
 
     // TODO work out how rage refund works for miss/dodge/parry
-    void specialAttack(double bonusDamage) {
+    template <class AttackCallback>
+    void specialAttack(unsigned cost, AttackCallback &&attack) {
+        assert(rage >= cost);
+        rage -= cost;
         events[EK_GlobalCD] = curTime + globalCDDuration;
         HitKind hk = specialTable.roll(ctx);
         double mul = 0.0;
@@ -429,7 +447,7 @@ struct DPS {
             break;
         }
         if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
-        addDamage((getWeaponDamage() + bonusDamage) * mul);
+        attack(mul);
     }
 
     void trySpecialAttack() {
@@ -437,14 +455,23 @@ struct DPS {
         if (isMortalStrikeAvailable()) {
             if (verbose) { std::cerr << "    Mortal Strike\n"; }
             events[EK_MortalStrikeCD] = curTime + 6;
-            rage -= mortalStrikeCost;
-            specialAttack(160);
+            specialAttack(mortalStrikeCost, [this](double mul) {
+                addDamage((getWeaponDamage() + 160) * mul);
+            });
             trySwordSpec();
+        } else if (isBloodthirstAvailable()) {
+            if (verbose) { std::cerr << "    Bloodthirst\n"; }
+            events[EK_BloodthirstCD] = curTime + 6;
+            specialAttack(bloodthirstCost, [this](double mul) {
+                addDamage(getAttackPower() * mul);
+            });
         } else if (isWhirlwindAvailable() && rage > 50) {
+            // TODO only available in serker stance
             if (verbose) { std::cerr << "    Whirlwind\n"; }
             events[EK_WhirlwindCD] = curTime + 10;
-            rage -= whirlwindCost;
-            specialAttack(0);
+            specialAttack(whirlwindCost, [this](double mul) {
+                addDamage(getWeaponDamage() * mul);
+            });
             // FIXME find out about this:
             //trySwordSpec();
         } else if (isOverpowerAvailable()) {
@@ -456,9 +483,10 @@ struct DPS {
                 if (verbose) { std::cerr << "    Overpower\n"; }
                 events[EK_OverpowerCD] = curTime + 5;
                 clear(EK_OverpowerProcExpire);
-                rage -= overpowerCost;
                 // TODO special modifiers - +crit chance, no dodge or parry
-                specialAttack(35);
+                specialAttack(overpowerCost, [this](double mul) {
+                    addDamage((getWeaponDamage() + 35) * mul);
+                });
                 trySwapStance();
             }
         }
@@ -564,6 +592,7 @@ void DPS::run(double duration) {
             gainRage(1);
             break;
         case EK_MortalStrikeCD:
+        case EK_BloodthirstCD:
         case EK_WhirlwindCD:
         case EK_OverpowerCD:
         case EK_GlobalCD:
@@ -690,15 +719,13 @@ void parseParamArg(Params &params, StrView str) {
     StrView name = str.substr(0, eq);
     StrView valStr = str.substr(eq + 1);
 
-    if (false) {
-    }
-    #define X(NAME, TYPE, VALUE)                   \
-        else if (name == #NAME) {                  \
-            parseParam(valStr, params.NAME, name); \
-        }
+    #define X(NAME, TYPE, VALUE)               \
+    if (name == #NAME) {                       \
+        parseParam(valStr, params.NAME, name); \
+    } else
     PARAM_LIST
     #undef X
-    else {
+    {
         std::cerr << "Invalid param name '" << name << "'\n";
         exit(1);
     }
