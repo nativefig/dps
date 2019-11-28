@@ -97,6 +97,9 @@ struct Context {
     bool chance(double ch) {
         if (ch >= 1.0)
             return true;
+        if (ch <= 0.0)
+            return false;
+        // FIXME this doesn't account for RNG::min
         return uint64_t(ch * RNG::max()) > rand();
     }
 };
@@ -151,6 +154,7 @@ double overpowerProcDuration = 5; // TODO is this right?
                                                                                \
     X(tacticalMasteryLevel, unsigned, 5)                                       \
     X(improvedOverpowerLevel, unsigned, 2)                                     \
+    X(deepWoundsLevel, unsigned, 3)                                            \
     X(impaleLevel, unsigned, 2)                                                \
     X(twoHandSpecLevel, unsigned, 3)                                           \
     X(swordSpecLevel, unsigned, 5)                                             \
@@ -244,7 +248,6 @@ struct AttackTable {
 };
 void AttackTable::dump() const { print(std::cerr); }
 
-// TODO rename
 struct DPS {
     const Params p;
 
@@ -253,6 +256,17 @@ struct DPS {
     const double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
     const double whiteCritMul = 2.0 * attackMul;
     const double specialCritMul = 2.0 + (p.impaleLevel * 0.1) * attackMul;
+    const double flurryBuff = 1.0 + ((p.flurryLevel == 0) ?
+                                     0.0 : 0.1 + (0.05 * p.flurryLevel - 1));
+    const double swordSpecChance = 0.01 * p.swordSpecLevel;
+    const double unbridledWrathChance = 0.08 * p.unbridledWrathLevel;
+
+    const double fixedCritBonus = + (0.01 * (p.crueltyLevel + p.axeSpecLevel))
+                                  - (0.01 * levelDelta)
+                                  - (levelDelta > 2 ? 0.018 : 0.0);
+
+    const double battleShoutAttackPower = 193 * (1.0 + 0.05 * p.improvedBattleShoutLevel);
+    const double deepWoundsTickMul = (0.2 * p.deepWoundsLevel) / 4;
 
     unsigned strength = p.strength;
     unsigned agility = p.agility;
@@ -260,12 +274,8 @@ struct DPS {
     unsigned hitBonus = p.hitBonus;
     unsigned critBonus = p.critBonus;
 
-    double mainSwingTime = p.mainSwingTime;
-    double offSwingTime = p.offSwingTime;
-
     bool berserkerStance = true;
 
-    // TODO make a typedef for the time type and define constants for not-scheduled
     double events[NumEventKinds];
     double curTime = 0.0;
     uint64_t totalDamage = 0;
@@ -275,6 +285,7 @@ struct DPS {
 
     // Round for each tick or not?
     unsigned deepWoundsTickDamage = 0;
+    unsigned flurryCharges = 0;
 
     Tick<EK_DeepWoundsTick, 4, 3> deepWoundsTicks;
     Tick<EK_BloodrageTick, 10, 1> bloodrageTicks;
@@ -346,13 +357,19 @@ struct DPS {
         totalDamage += uint64_t(damage);
     }
 
+    // TODO add speed enchant as a param
+    double getMainSwingTime() const {
+        return p.mainSwingTime / flurryBuff;
+    }
+    double getOffSwingTime() const {
+        return p.offSwingTime / flurryBuff;
+    }
+
     double getCritChance() const {
-        return 0.05
+        return + 0.05
                + (berserkerStance ? 0.03 : 0.0)
                + ((0.01 / 20) * agility)
-               + (0.01 * (p.crueltyLevel + p.axeSpecLevel))
-               - (0.01 * levelDelta)
-               - (levelDelta > 2 ? 0.018 : 0.0);
+               + fixedCritBonus;
     }
 
     // TODO how can we make sure that things like this stay in sync? E.g.
@@ -363,15 +380,31 @@ struct DPS {
         specialTable.set(HK_Crit, ch);
     }
     double getAttackPower() const {
-        return strength * 2
-               + (193 * (1.0 + 0.05 * p.improvedBattleShoutLevel))
-               + bonusAttackPower;
+        return strength * 2 + battleShoutAttackPower + bonusAttackPower;
     }
 
-    void trySwordSpec() {
-        if (ctx.chance(0.01 * p.swordSpecLevel)) {
+    void applyDeepWounds() {
+        if (p.deepWoundsLevel == 0)
+            return;
+        deepWoundsTicks.start(*this);
+        deepWoundsTickDamage = getWeaponDamage(true, /*average=*/true) *
+                               deepWoundsTickMul;
+    }
+    void applyFlurry() {
+        if (p.flurryLevel)
+            return;
+        flurryCharges = 3;
+        // TODO Decide if this should update pending swings?
+    }
+    void applySwordSpec() {
+        if (ctx.chance(swordSpecChance)) {
             if (verbose) { std::cerr << "    Sword spec!\n"; }
             weaponSwing();
+        }
+    }
+    void applyUnbridledWrath() {
+        if (ctx.chance(unbridledWrathChance)) {
+            gainRage(1);
         }
     }
 
@@ -390,6 +423,15 @@ struct DPS {
             base = dist(ctx.rng);
         }
         return base + ((getAttackPower() / 14) * swingTime);
+    }
+
+    void gainRage(unsigned r) {
+        rage = std::min(rage + r, 100U);
+        if (verbose) { std::cerr << "    +" << r << " rage, " << rage << " total\n"; }
+        // FIXME doing this here could have unexpected side-effects.
+        // Might be better to do this after each iteration instead, since we
+        // can never do more than one special attack in a row.
+        trySpecialAttack();
     }
 
     bool isMortalStrikeAvailable() const {
@@ -431,14 +473,7 @@ struct DPS {
             return false;
         if (isActive(EK_GlobalCD))
             return false;
-        if (!isActive(EK_OverpowerProcExpire))
-            return false;
-        return true;
-    }
-
-    void applyDeepWounds() {
-        deepWoundsTicks.start(*this);
-        deepWoundsTickDamage = getWeaponDamage(true, /*average=*/true) * (0.6 * 0.25);
+        return isActive(EK_OverpowerProcExpire);
     }
 
     // TODO work out how rage refund works for miss/dodge/parry
@@ -449,6 +484,7 @@ struct DPS {
         rage -= cost;
         events[EK_GlobalCD] = curTime + globalCDDuration;
         HitKind hk = table.roll(ctx);
+        if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
         double mul = 0.0;
         switch (hk) {
         case HK_Miss:
@@ -462,6 +498,7 @@ struct DPS {
             break;
         case HK_Crit:
             applyDeepWounds();
+            applyFlurry();
             mul = specialCritMul;
             break;
         case HK_Hit:
@@ -469,11 +506,14 @@ struct DPS {
             mul = attackMul;
             break;
         }
-        if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
         attack(mul);
+        applyUnbridledWrath();
     }
 
     void trySpecialAttack() {
+        if (isActive(EK_GlobalCD))
+            return;
+
         // FIXME GCD gets checked 3 times here - optimise?
         if (isMortalStrikeAvailable()) {
             if (verbose) { std::cerr << "    Mortal Strike\n"; }
@@ -482,7 +522,7 @@ struct DPS {
                           [this](double mul) {
                 addDamage((getWeaponDamage() + 160) * mul);
             });
-            trySwordSpec();
+            applySwordSpec();
         } else if (isBloodthirstAvailable()) {
             if (verbose) { std::cerr << "    Bloodthirst\n"; }
             events[EK_BloodthirstCD] = curTime + 6;
@@ -499,7 +539,7 @@ struct DPS {
                 addDamage(getWeaponDamage() * mul);
             });
             // FIXME find out about this:
-            //trySwordSpec();
+            //applySwordSpec();
         } else if (isOverpowerAvailable()) {
             // TODO use whirlwind if possible before stance swap
             if (berserkerStance) {
@@ -519,15 +559,10 @@ struct DPS {
                               [this](double mul) {
                     addDamage((getWeaponDamage() + 35) * mul);
                 });
+                applySwordSpec();
                 trySwapStance();
             }
         }
-    }
-
-    void gainRage(unsigned r) {
-        rage = std::min(rage + r, 100U);
-        if (verbose) { std::cerr << "    +" << r << " rage, " << rage << " total\n"; }
-        trySpecialAttack();
     }
 
     double getWeaponSwingRage(double damage) {
@@ -535,8 +570,6 @@ struct DPS {
     }
 
     void weaponSwing(bool main = true) {
-        events[EK_MainSwing] = curTime + (main ? mainSwingTime : offSwingTime);
-
         HitKind hk = whiteTable.roll(ctx);
         if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
         double mul = 0.0;
@@ -553,6 +586,7 @@ struct DPS {
             break;
         case HK_Crit:
             applyDeepWounds();
+            applyFlurry();
             mul = whiteCritMul;
             break;
         case HK_Hit:
@@ -560,10 +594,17 @@ struct DPS {
             mul = attackMul;
             break;
         }
+        applySwordSpec();
+        applyUnbridledWrath();
+
+        // Set next swing time after (possibly) applying flurry
+        events[EK_MainSwing] = curTime + (main ? getMainSwingTime() : getOffSwingTime());
+
         double damage = getWeaponDamage(main) * mul;
         addDamage(damage);
         gainRage(getWeaponSwingRage(damage));
     }
+
     void run(double duration);
 };
 
@@ -609,9 +650,15 @@ void DPS::run(double duration) {
 
         switch (curEvent) {
         case EK_MainSwing:
+            if (flurryCharges) {
+                --flurryCharges;
+            }
             weaponSwing(true);
             break;
         case EK_OffSwing:
+            if (flurryCharges) {
+                --flurryCharges;
+            }
             weaponSwing(false);
             break;
         case EK_AngerManagement:
@@ -714,7 +761,17 @@ void parseParamArg(Params &params, StrView str) {
 int main(int argc, char **argv) {
     Params params;
     for (int i = 1; i < argc; ++i) {
-        parseParamArg(params, argv[i]);
+        StrView arg = argv[i];
+        if (arg.startswith("-")) {
+            if (arg == "--verbose") {
+                verbose = true;
+            } else {
+                std::cerr << "Invalid argument '" << arg << "'\n";
+                exit(1);
+            }
+        } else {
+            parseParamArg(params, argv[i]);
+        }
     }
 
     DPS dps(params);
@@ -727,5 +784,5 @@ int main(int argc, char **argv) {
     }
 }
 
-// TODO
-// flurry
+// TODO options: rng seed, duration
+// TODO print out seed on every run to help reproduce bugs
