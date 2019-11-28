@@ -396,6 +396,7 @@ struct DPS {
         flurryCharges = 3;
         // TODO Decide if this should update pending swings?
     }
+    // TODO can this proc off misses?
     void applySwordSpec() {
         if (ctx.chance(swordSpecChance)) {
             if (verbose) { std::cerr << "    Sword spec!\n"; }
@@ -428,10 +429,6 @@ struct DPS {
     void gainRage(unsigned r) {
         rage = std::min(rage + r, 100U);
         if (verbose) { std::cerr << "    +" << r << " rage, " << rage << " total\n"; }
-        // FIXME doing this here could have unexpected side-effects.
-        // Might be better to do this after each iteration instead, since we
-        // can never do more than one special attack in a row.
-        trySpecialAttack();
     }
 
     bool isMortalStrikeAvailable() const {
@@ -579,7 +576,6 @@ struct DPS {
             return;
         case HK_Dodge:
             events[EK_OverpowerProcExpire] = curTime + overpowerProcDuration;
-            trySpecialAttack();
             return;
         case HK_Glance:
             mul = glanceMul;
@@ -679,7 +675,6 @@ void DPS::run(double duration) {
         case EK_OverpowerCD:
         case EK_GlobalCD:
             clear(curEvent);
-            trySpecialAttack();
             break;
         case EK_BloodrageCD:
             // Not on gcd
@@ -695,13 +690,13 @@ void DPS::run(double duration) {
             break;
         case EK_StanceCD:
             clear(curEvent);
-            if (berserkerStance) {
-                trySpecialAttack();
-            } else if (!isActive(EK_OverpowerProcExpire)) {
+            if (!berserkerStance && !isActive(EK_OverpowerProcExpire)) {
                 swapStance();
             }
             break;
         }
+
+        trySpecialAttack();
     }
 }
 
