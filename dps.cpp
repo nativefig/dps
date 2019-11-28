@@ -775,7 +775,7 @@ int main(int argc, char **argv) {
     }
 
     DPS dps(params);
-    double duration = 10 * 60 * 60; // TODO make this an option
+    double duration = 100 * 60 * 60; // TODO make this an option
     dps.run(duration);
     std::cout << "DPS: " << dps.totalDamage / duration << "\n";
     if (verbose) {
