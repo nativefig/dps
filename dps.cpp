@@ -134,11 +134,11 @@ double overpowerProcDuration = 5; // TODO is this right?
                                                                                \
     /* Stats */                                                                \
                                                                                \
-    X(strength, unsigned, 400)                                                 \
-    X(agility, unsigned, 50)                                                   \
-    X(bonusAttackPower, unsigned, 100)                                         \
-    X(hitBonus, unsigned, 4)                                                   \
-    X(critBonus, unsigned, 3)                                                  \
+    X(strength, unsigned, 0)                                                   \
+    X(agility, unsigned, 0)                                                    \
+    X(bonusAttackPower, unsigned, 0)                                           \
+    X(hitBonus, unsigned, 0)                                                   \
+    X(critBonus, unsigned, 0)                                                  \
                                                                                \
     /* Weapons */                                                              \
                                                                                \
@@ -152,20 +152,21 @@ double overpowerProcDuration = 5; // TODO is this right?
                                                                                \
     /* Arms talents */                                                         \
                                                                                \
-    X(tacticalMasteryLevel, unsigned, 5)                                       \
-    X(improvedOverpowerLevel, unsigned, 2)                                     \
-    X(deepWoundsLevel, unsigned, 3)                                            \
-    X(impaleLevel, unsigned, 2)                                                \
-    X(twoHandSpecLevel, unsigned, 3)                                           \
-    X(swordSpecLevel, unsigned, 5)                                             \
+    X(tacticalMasteryLevel, unsigned, 0)                                       \
+    X(angerManagementLevel, unsigned, 0)                                       \
+    X(improvedOverpowerLevel, unsigned, 0)                                     \
+    X(deepWoundsLevel, unsigned, 0)                                            \
+    X(impaleLevel, unsigned, 0)                                                \
+    X(twoHandSpecLevel, unsigned, 0)                                           \
+    X(swordSpecLevel, unsigned, 0)                                             \
     X(axeSpecLevel, unsigned, 0)                                               \
-    X(mortalStrikeLevel, unsigned, 1)                                          \
+    X(mortalStrikeLevel, unsigned, 0)                                          \
                                                                                \
     /* Fury talents */                                                         \
                                                                                \
-    X(crueltyLevel, unsigned, 3)                                               \
-    X(improvedBattleShoutLevel, unsigned, 0)                                   \
+    X(crueltyLevel, unsigned, 0)                                               \
     X(unbridledWrathLevel, unsigned, 0)                                        \
+    X(improvedBattleShoutLevel, unsigned, 0)                                   \
     X(dualWieldSpecLevel, unsigned, 0)                                         \
     X(flurryLevel, unsigned, 0)                                                \
     X(improvedBerserkerRageLevel, unsigned, 0)                                 \
@@ -268,11 +269,12 @@ struct DPS {
     const double battleShoutAttackPower = 193 * (1.0 + 0.05 * p.improvedBattleShoutLevel);
     const double deepWoundsTickMul = (0.2 * p.deepWoundsLevel) / 4;
 
+    const double hitBonus = p.hitBonus * 0.01;
+    const double critBonus = p.critBonus * 0.01;
+
     unsigned strength = p.strength;
     unsigned agility = p.agility;
     unsigned bonusAttackPower = p.bonusAttackPower;
-    unsigned hitBonus = p.hitBonus;
-    unsigned critBonus = p.critBonus;
 
     bool berserkerStance = true;
 
@@ -310,7 +312,8 @@ struct DPS {
         double dodgeChance = 0.05 + (levelDelta * 0.005);
         double specialMissChance = 0.05
                                    + levelDelta * 0.01
-                                   + (levelDelta > 2 ? 0.01 : 0.0);
+                                   + (levelDelta > 2 ? 0.01 : 0.0)
+                                   - hitBonus;
 
         whiteTable.set(HK_Miss, specialMissChance + (p.dualWield ? 0.19 : 0.0));
         whiteTable.set(HK_Dodge, dodgeChance);
@@ -325,7 +328,9 @@ struct DPS {
         if (p.dualWield) {
             events[EK_OffSwing] = 0.0;
         }
-        events[EK_AngerManagement] = 0.0;
+        if (p.angerManagementLevel) {
+            events[EK_AngerManagement] = 0.0;
+        }
         events[EK_BloodrageCD] = 0.0;
     }
 
@@ -369,7 +374,8 @@ struct DPS {
         return + 0.05
                + (berserkerStance ? 0.03 : 0.0)
                + ((0.01 / 20) * agility)
-               + fixedCritBonus;
+               + fixedCritBonus
+               + critBonus;
     }
 
     // TODO how can we make sure that things like this stay in sync? E.g.
@@ -552,6 +558,7 @@ struct DPS {
                 if (p.improvedOverpowerLevel) {
                     table.set(HK_Crit, getCritChance() + 0.25 * p.improvedOverpowerLevel);
                 }
+                // FIXME we need to check rage again after swapping stances
                 specialAttack(overpowerCost, table,
                               [this](double mul) {
                     addDamage((getWeaponDamage() + 35) * mul);
