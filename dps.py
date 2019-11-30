@@ -165,6 +165,11 @@ dw_arms_fury = {
     "improvedBerserkerRageLevel" : 0,
 }
 
+class Run:
+    def __init__(self, name, params):
+        self.name = name
+        self.params = params
+
 def merge(params):
     result = dict()
     for p in params:
@@ -172,49 +177,43 @@ def merge(params):
             result[k] = v
     return result
 
-def run(params):
-    merged_params = merge(params)
+def do_run(run):
+    print("Run: " + run.name)
     cmd = [ dps ]
-    for k, v in merged_params.items():
+    for k, v in run.params.items():
         cmd.append("{}={}".format(k, v))
     if args.verbose:
         cmd.append("--verbose")
         print(" ".join(cmd))
+    if args.log:
+        cmd.append("--log={}.text".format(run.name))
     check_call(cmd)
 
 def main():
     parser = argparse.ArgumentParser(description="dps runner script")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--log", action="store_true")
 
     global args
     args = parser.parse_args()
 
-    print("2H No talents")
-    run([th, gear])
-    print("2H Arms")
-    run([th, gear, th_arms])
-    print("2H Arms/Prot")
-    run([th, gear, th_arms_prot])
-    print("2H Fury")
-    run([th, gear, th_fury])
-    print("2H Fury/Prot")
-    run([th, gear, th_fury_prot])
-    print("2H Arms/Fury")
-    run([th, gear, th_arms_fury])
+    runs = [
+        Run("2h-no-talents", merge([th, gear])),
+        Run("2h-arms", merge([th, gear, th_arms])),
+        Run("2h-arms-prot", merge([th, gear, th_arms_prot])),
+        Run("2h-fury", merge([th, gear, th_fury])),
+        Run("2h-fury-prot", merge([th, gear, th_fury_prot])),
+        Run("2h-arms-fury", merge([th, gear, th_arms_fury])),
 
-    print("")
+        Run("dw-no-talents", merge([dw, gear])),
+        Run("dw-arms", merge([dw, gear, dw_arms])),
+        Run("dw-arms-prot", merge([dw, gear, dw_arms_prot])),
+        Run("dw-fury", merge([dw, gear, dw_fury])),
+        Run("dw-fury-prot", merge([dw, gear, dw_fury_prot])),
+        Run("dw-arms-fury", merge([dw, gear, dw_arms_fury])),
+    ]
 
-    print("DW No talents")
-    run([dw, gear])
-    print("DW Arms")
-    run([dw, gear, dw_arms])
-    print("DW Arms/Prot")
-    run([dw, gear, dw_arms_prot])
-    print("DW Fury")
-    run([dw, gear, dw_fury])
-    print("DW Fury/Prot")
-    run([dw, gear, dw_fury_prot])
-    print("DW Arms/Fury")
-    run([dw, gear, dw_arms_fury])
+    for run in runs:
+        do_run(run)
 
 main()
