@@ -89,7 +89,7 @@ using RNG = std::minstd_rand;
 struct Context {
     RNG rng;
 
-    Context() : rng(std::chrono::system_clock::now().time_since_epoch().count()) { }
+    Context(unsigned seed) : rng(seed) { }
 
     uint64_t rand() {
         return rng();
@@ -300,8 +300,8 @@ struct DPS {
     AttackTable whiteTable;
     AttackTable specialTable;
 
-    DPS(const Params &params) :
-        p(params),
+    DPS(const Params &params, unsigned seed) :
+        p(params), ctx(seed),
         mainWeaponDamageDist(p.mainWeaponDamageMin, p.mainWeaponDamageMax),
         offWeaponDamageDist(p.offWeaponDamageMin, p.offWeaponDamageMax) {
 
@@ -724,32 +724,53 @@ void DPS::run(double duration) {
     }
 }
 
-void parseParam(StrView str, double &out, StrView param) {
+bool parseVal(StrView str, double &out) {
     char *end = nullptr;
     double tmp = std::strtod(str.data(), &end);
-    if (end != str.end()) {
-        std::cerr << "Invalid value '" << str << "' for param '"
-                  << param << "'. Expected decimal.";
-        exit(1);
-    }
+    if (end != str.end())
+        return false;
     out = tmp;
+    return true;
 }
-void parseParam(StrView str, unsigned &out, StrView param) {
+bool parseVal(StrView str, unsigned &out) {
     char *end = nullptr;
     unsigned long tmp = strtoul(str.data(), &end, 10);
-    if (end != str.end() || tmp != unsigned(tmp)) {
-        std::cerr << "Invalid value '" << str << "' for param '"
-                  << param << "'. Expected unsigned integer.\n";
-        exit(1);
-    }
+    if (end != str.end() || tmp != unsigned(tmp))
+        return false;
     out = unsigned(tmp);
+    return true;
 }
-void parseParam(StrView str, bool &out, StrView param) {
+bool parseVal(StrView str, bool &out) {
     if (str == "1") {
         out = true;
     } else if (str == "0") {
         out = false;
     } else {
+        return false;
+    }
+    return true;
+}
+bool parseVal(StrView str, StrView &out) {
+    out = str;
+    return true;
+}
+
+void parseParam(StrView str, unsigned &out, StrView param) {
+    if (!parseVal(str, out)) {
+        std::cerr << "Invalid value '" << str << "' for param '"
+                  << param << "'. Expected unsigned integer.";
+        exit(1);
+    }
+}
+void parseParam(StrView str, double &out, StrView param) {
+    if (!parseVal(str, out)) {
+        std::cerr << "Invalid value '" << str << "' for param '"
+                  << param << "'. Expected decimal.";
+        exit(1);
+    }
+}
+void parseParam(StrView str, bool &out, StrView param) {
+    if (!parseVal(str, out)) {
         std::cerr << "Invalid value '" << str << "' for param '"
                   << param << "'. Expected 0 or 1.\n";
         exit(1);
@@ -777,24 +798,124 @@ void parseParamArg(Params &params, StrView str) {
     }
 }
 
-int main(int argc, char **argv) {
-    Params params;
-    for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
-        if (arg.startswith("-")) {
-            if (arg == "--verbose") {
-                verbose = true;
+struct ArgParser {
+    const char *const *argv;
+    size_t numArgs;
+    size_t idx = 0;
+
+    ArgParser(const char *const *argv, size_t numArgs) :
+        argv(argv), numArgs(numArgs) { }
+
+    bool finished() const { return idx >= numArgs; }
+
+    StrView peek() const {
+        assert(!finished());
+        return argv[idx];
+    }
+
+    StrView consume() {
+        assert(!finished());
+        StrView result = peek();
+        ++idx;
+        return result;
+    }
+
+    template <class T>
+    bool consume(char shortName, StrView longName, T &val) {
+        assert(!finished());
+        assert(!longName.empty());
+        StrView arg = peek();
+        StrView valStr;
+        bool sep = false;
+
+        if (arg.startswith("--") && arg.substr(2).startswith(longName)) {
+            if (arg.size() == longName.size() + 2) {
+                sep = true;
+            } else if (arg[longName.size() + 2] == '=') {
+                valStr = arg.substr(longName.size() + 3);
             } else {
-                std::cerr << "Invalid argument '" << arg << "'\n";
+                return false;
+            }
+        } else if (shortName && arg.size() == 2 &&
+                   arg[0] == '-' && arg[1] == shortName) {
+            sep = true;
+        } else {
+            return false;
+        }
+        if (sep) {
+            ++idx;
+            if (finished()) {
+                std::cerr << "Missing value for argument " << arg << "\n";
                 exit(1);
             }
+            valStr = argv[idx];
+        }
+        if (!parseVal(valStr, val)) {
+            std::cerr << "Invalid value for argument "
+                      << arg << ": '" << valStr << "'\n";
+        }
+        ++idx;
+        return true;
+    }
+    template <class T>
+    bool consume(StrView longName, T &val) {
+        return consume<T>(0, longName, val);
+    }
+
+    bool consume(char shortName, StrView longName) {
+        assert(!finished());
+        assert(!longName.empty());
+        StrView arg = peek();
+        if (arg.startswith("--") && arg.substr(2) == longName) {
+            // Good
+        } else if (shortName && arg.size() == 2 &&
+                   arg[0] == '-' && arg[1] == shortName) {
+            // Good
         } else {
-            parseParamArg(params, argv[i]);
+            return false;
+        }
+        ++idx;
+        return true;
+    }
+    bool consume(StrView longName) {
+        return consume(0, longName);
+    }
+};
+
+int main(int argc, char **argv) {
+    Params params;
+    unsigned durationHours = 100;
+    bool haveSeed = false;
+    unsigned seed = 0;
+    StrView logFilename;
+
+    ArgParser argParser(argv + 1, argc - 1);
+    while (!argParser.finished()) {
+        if (argParser.consume('v', "verbose")) {
+            verbose = true;
+        } else if (argParser.consume("duration", durationHours)) {
+            // Pass
+        } else if (argParser.consume("seed", seed)) {
+            haveSeed = true;
+        } else if (argParser.consume("log", logFilename)) {
+        } else if (argParser.peek().startswith("-")) {
+            std::cerr << "Invalid argument '" << argParser.peek() << "'\n";
+            exit(1);
+        } else {
+            parseParamArg(params, argParser.consume());
         }
     }
 
-    DPS dps(params);
-    double duration = 100 * 60 * 60; // TODO make this an option
+    if (!haveSeed) {
+        seed = unsigned(std::chrono::system_clock::now().time_since_epoch().count());
+    }
+
+    if (verbose) {
+        std::cerr << "Seed: " << seed << "\n";
+    }
+
+    DPS dps(params, seed);
+    double duration = durationHours * 60 * 60;
     dps.run(duration);
     std::cout << "DPS: " << dps.totalDamage / duration << "\n";
     if (verbose) {
@@ -803,5 +924,5 @@ int main(int argc, char **argv) {
     }
 }
 
-// TODO options: rng seed, duration
 // TODO print out seed on every run to help reproduce bugs
+// TODO decide whether it's worth using overpower without the talent
