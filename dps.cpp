@@ -2,12 +2,16 @@
 #include <cfloat>
 #include <climits>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 
 #include <chrono>
-#include <iostream>
+#include <memory>
+#include <sstream>
 #include <random>
+#include <utility>
 
 #include "StrView.h"
 
@@ -81,6 +85,25 @@ const size_t NumHitKinds = 0
     #undef X
     ;
 ////////////////////////////////////////////////////////////////////////////////
+
+FILE *logFile = nullptr;
+#if 0
+void log(const char *format, ...) {
+    if (logFile) {
+        va_list va;
+        va_start(va, format);
+        vfprintf(logFile, format, va);
+        va_end(va);
+    }
+}
+#else
+#define log(...)                           \
+    do {                                   \
+        if (logFile) {                     \
+            fprintf(logFile, __VA_ARGS__); \
+        }                                  \
+    } while(0)
+#endif
 
 // TODO replace most uses of unsigned with size_t - should be faster?
 
@@ -214,7 +237,9 @@ struct AttackTable {
         return HitKind(i);
     }
 
-    void print(std::ostream &out) const {
+    void print(FILE *file) const {
+        (void)file;
+#if 0
         auto printRow = [this, &out](size_t i, double chance) {
             out << "  " << getHitKindName(HitKind(i)) << ": " << chance << "\n";
         };
@@ -228,9 +253,10 @@ struct AttackTable {
         }
         printRow(i, double(RNG::max() - table[i - 1]) / RNG::max());
         out << "}\n";
+#endif
     }
-    void printStats(std::ostream &out) const {
-        (void)out;
+    void printStats(FILE *file) const {
+        (void)file;
         // TODO store these elsewhere
 #if 0
         size_t total = 0;
@@ -247,7 +273,7 @@ struct AttackTable {
     }
     void dump() const;
 };
-void AttackTable::dump() const { print(std::cerr); }
+void AttackTable::dump() const { print(stderr); }
 
 struct DPS {
     const Params p;
@@ -342,9 +368,7 @@ struct DPS {
     }
 
     void swapStance() {
-        if (verbose) {
-            std::cerr << "    " << (berserkerStance ? "Battle" : "Berserker") << " stance\n";
-        }
+        log("%s stance\n", (berserkerStance ? "Battle" : "Berserker"));
         assert(!isActive(EK_StanceCD));
         events[EK_StanceCD] = curTime + stanceCDDuration;
         berserkerStance = !berserkerStance;
@@ -358,7 +382,7 @@ struct DPS {
     }
 
     void addDamage(double damage) {
-        if (verbose) { std::cerr << "    " << damage << " damage\n"; }
+        log("    %.2f damage\n", damage);
         totalDamage += uint64_t(damage);
     }
 
@@ -405,13 +429,13 @@ struct DPS {
     // TODO can this proc off misses?
     void applySwordSpec() {
         if (ctx.chance(swordSpecChance)) {
-            if (verbose) { std::cerr << "    Sword spec!\n"; }
+            log("    Sword spec!\n");
             weaponSwing();
         }
     }
     void applyUnbridledWrath() {
         if (ctx.chance(unbridledWrathChance)) {
-            if (verbose) { std::cerr << "    Unbridled wrath\n"; }
+            log("    Unbridled wrath\n");
             gainRage(1);
         }
     }
@@ -435,7 +459,7 @@ struct DPS {
 
     void gainRage(unsigned r) {
         rage = std::min(rage + r, 100U);
-        if (verbose) { std::cerr << "    +" << r << " rage, " << rage << " total\n"; }
+        log("    +%u rage, %u total\n", r, rage);
     }
 
     bool isMortalStrikeAvailable() const {
@@ -488,7 +512,7 @@ struct DPS {
         rage -= cost;
         events[EK_GlobalCD] = curTime + globalCDDuration;
         HitKind hk = table.roll(ctx);
-        if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
+        log("    %s\n", getHitKindName(hk));
         double mul = 0.0;
         bool success = true;
         switch (hk) {
@@ -524,7 +548,7 @@ struct DPS {
 
         // FIXME GCD gets checked 3 times here - optimise?
         if (isMortalStrikeAvailable()) {
-            if (verbose) { std::cerr << "    Mortal Strike\n"; }
+            log("    Mortal Strike\n");
             events[EK_MortalStrikeCD] = curTime + 6;
             specialAttack(mortalStrikeCost, specialTable,
                           [this](double mul) {
@@ -532,7 +556,7 @@ struct DPS {
             });
             applySwordSpec();
         } else if (isBloodthirstAvailable()) {
-            if (verbose) { std::cerr << "    Bloodthirst\n"; }
+            log("    Bloodthirst\n");
             events[EK_BloodthirstCD] = curTime + 6;
             specialAttack(bloodthirstCost, specialTable,
                           [this](double mul) {
@@ -540,7 +564,7 @@ struct DPS {
             });
         } else if (isWhirlwindAvailable() && rage > 50) {
             // TODO only available in serker stance
-            if (verbose) { std::cerr << "    Whirlwind\n"; }
+            log("    Whirlwind\n");
             events[EK_WhirlwindCD] = curTime + 10;
             specialAttack(whirlwindCost, specialTable,
                           [this](double mul) {
@@ -554,7 +578,7 @@ struct DPS {
                 trySwapStance();
             }
             if (!berserkerStance && isOverpowerAvailable()) {
-                if (verbose) { std::cerr << "    Overpower\n"; }
+                log("    Overpower\n");
                 events[EK_OverpowerCD] = curTime + 5;
                 clear(EK_OverpowerProcExpire);
                 AttackTable table = specialTable;
@@ -580,7 +604,7 @@ struct DPS {
 
     void weaponSwing(bool main = true) {
         HitKind hk = whiteTable.roll(ctx);
-        if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
+        log("    %s\n", getHitKindName(hk));
         double mul = 0.0;
         bool success = true;
         switch (hk) {
@@ -664,9 +688,7 @@ void DPS::run(double duration) {
             curTime = lowTime;
         }
 
-        if (verbose) {
-            std::cerr << curTime << " " << getEventName(curEvent) << "\n";
-        }
+        log("%.4f %s\n", curTime, getEventName(curEvent));
 
         switch (curEvent) {
         case EK_MainSwing:
@@ -755,33 +777,62 @@ bool parseVal(StrView str, StrView &out) {
     return true;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
+struct ErrorImpl {
+    std::stringstream message;
+    bool fatal = false;
+
+    ErrorImpl(bool fatal) : fatal(fatal) { }
+
+    ~ErrorImpl() {
+        std::string str = message.str();
+        fprintf(stderr, "%s", str.c_str());
+        if (fatal) {
+            exit(1);
+        }
+    }
+};
+using Error = std::unique_ptr<ErrorImpl>;
+
+Error error() {
+    return Error(new ErrorImpl(false));
+}
+Error fatal() {
+    return Error(new ErrorImpl(true));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+template <class T>
+const Error &operator<<(const Error &err, T &&arg) {
+    err->message << std::forward<T>(arg);
+    return err;
+}
+
 void parseParam(StrView str, unsigned &out, StrView param) {
     if (!parseVal(str, out)) {
-        std::cerr << "Invalid value '" << str << "' for param '"
-                  << param << "'. Expected unsigned integer.";
-        exit(1);
+        fatal() << "Invalid value '" << str << "' for param '"
+                << param << "'. Expected unsigned integer.\n";
     }
 }
 void parseParam(StrView str, double &out, StrView param) {
     if (!parseVal(str, out)) {
-        std::cerr << "Invalid value '" << str << "' for param '"
-                  << param << "'. Expected decimal.";
-        exit(1);
+        fatal() << "Invalid value '" << str << "' for param '"
+                << param << "'. Expected decimal.\n";
     }
 }
 void parseParam(StrView str, bool &out, StrView param) {
     if (!parseVal(str, out)) {
-        std::cerr << "Invalid value '" << str << "' for param '"
-                  << param << "'. Expected 0 or 1.\n";
-        exit(1);
+        fatal() << "Invalid value '" << str << "' for param '"
+                << param << "'. Expected 0 or 1.\n";
     }
 }
 
 void parseParamArg(Params &params, StrView str) {
     auto eq = str.find('=');
     if (eq == StrView::npos) {
-        std::cerr << "Invalid argument '" << str << "'\n";
-        exit(1);
+        fatal() << "Invalid argument '" << str << "'\n";
     }
     StrView name = str.substr(0, eq);
     StrView valStr = str.substr(eq + 1);
@@ -793,8 +844,7 @@ void parseParamArg(Params &params, StrView str) {
     PARAM_LIST
     #undef X
     {
-        std::cerr << "Invalid param name '" << name << "'\n";
-        exit(1);
+        fatal() << "Invalid param name '" << name << "'\n";
     }
 }
 
@@ -845,14 +895,13 @@ struct ArgParser {
         if (sep) {
             ++idx;
             if (finished()) {
-                std::cerr << "Missing value for argument " << arg << "\n";
-                exit(1);
+                fatal() << "Missing value for argument " << arg << "\n";
             }
             valStr = argv[idx];
         }
         if (!parseVal(valStr, val)) {
-            std::cerr << "Invalid value for argument "
-                      << arg << ": '" << valStr << "'\n";
+            fatal() << "Invalid value for argument "
+                    << arg << ": '" << valStr << "'\n";
         }
         ++idx;
         return true;
@@ -882,11 +931,26 @@ struct ArgParser {
     }
 };
 
+#if 0
+template <class... Ts>
+void print(const char *format, Ts... args) {
+    char buf[1024];
+    const char *cur = format;
+    bool esc = false;
+    while (char ch = *cur) {
+        ++cur;
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
     Params params;
     unsigned durationHours = 100;
+
     bool haveSeed = false;
     unsigned seed = 0;
+
+    bool haveLog = false;
     StrView logFilename;
 
     ArgParser argParser(argv + 1, argc - 1);
@@ -898,9 +962,9 @@ int main(int argc, char **argv) {
         } else if (argParser.consume("seed", seed)) {
             haveSeed = true;
         } else if (argParser.consume("log", logFilename)) {
+            haveLog = true;
         } else if (argParser.peek().startswith("-")) {
-            std::cerr << "Invalid argument '" << argParser.peek() << "'\n";
-            exit(1);
+            fatal() << "Invalid argument '" << argParser.peek() << "'\n";
         } else {
             parseParamArg(params, argParser.consume());
         }
@@ -910,17 +974,23 @@ int main(int argc, char **argv) {
         seed = unsigned(std::chrono::system_clock::now().time_since_epoch().count());
     }
 
-    if (verbose) {
-        std::cerr << "Seed: " << seed << "\n";
+    if (haveLog) {
+        const char *str = logFilename.data();
+        assert(str[logFilename.size()] == '\0');
+        logFile = ::fopen(str, "w");
+    } else if (verbose) {
+        logFile = stderr;
     }
+
+    log("Seed: %u\n", seed);
 
     DPS dps(params, seed);
     double duration = durationHours * 60 * 60;
     dps.run(duration);
-    std::cout << "DPS: " << dps.totalDamage / duration << "\n";
+    printf("DPS: %.4f\n", dps.totalDamage / duration);
     if (verbose) {
-        dps.whiteTable.print(std::cerr);
-        dps.whiteTable.printStats(std::cerr);
+        dps.whiteTable.print(stderr);
+        dps.whiteTable.printStats(stderr);
     }
 }
 
