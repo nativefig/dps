@@ -28,6 +28,7 @@
     X(WhirlwindCD)                                                             \
     X(OverpowerCD)                                                             \
     X(BloodrageCD)                                                             \
+    X(BerserkerRageCD)                                                         \
     X(StanceCD)                                                                \
     X(GlobalCD)
 
@@ -368,7 +369,7 @@ struct DPS {
     }
 
     void swapStance() {
-        log("%s stance\n", (berserkerStance ? "Battle" : "Berserker"));
+        log("    %s stance\n", (berserkerStance ? "Battle" : "Berserker"));
         assert(!isActive(EK_StanceCD));
         events[EK_StanceCD] = curTime + stanceCDDuration;
         berserkerStance = !berserkerStance;
@@ -485,6 +486,8 @@ struct DPS {
         return true;
     }
     bool isWhirlwindAvailable() const {
+        if (!berserkerStance)
+            return false;
         if (rage < whirlwindCost)
             return false;
         if (isActive(EK_WhirlwindCD))
@@ -504,13 +507,18 @@ struct DPS {
         return isActive(EK_OverpowerProcExpire);
     }
 
+    void triggerGlobalCD() {
+        assert(!isActive(EK_GlobalCD));
+        events[EK_GlobalCD] = curTime + globalCDDuration;
+    }
+
     // TODO work out how rage refund works for miss/dodge/parry
     template <class AttackCallback>
     void specialAttack(unsigned cost, const AttackTable &table,
                        AttackCallback &&attack) {
         assert(rage >= cost);
         rage -= cost;
-        events[EK_GlobalCD] = curTime + globalCDDuration;
+        triggerGlobalCD();
         HitKind hk = table.roll(ctx);
         log("    %s\n", getHitKindName(hk));
         double mul = 0.0;
@@ -547,7 +555,14 @@ struct DPS {
             return;
 
         // FIXME GCD gets checked 3 times here - optimise?
-        if (isMortalStrikeAvailable()) {
+        if (p.improvedBerserkerRageLevel &&
+                berserkerStance &&
+                !isActive(EK_BerserkerRageCD)) {
+            log("    Berserker Rage\n");
+            gainRage(5 * p.improvedBerserkerRageLevel);
+            events[EK_BerserkerRageCD] = curTime + 30;
+            triggerGlobalCD();
+        } else if (isMortalStrikeAvailable()) {
             log("    Mortal Strike\n");
             events[EK_MortalStrikeCD] = curTime + 6;
             specialAttack(mortalStrikeCost, specialTable,
@@ -563,7 +578,6 @@ struct DPS {
                 addDamage(getAttackPower() * mul);
             });
         } else if (isWhirlwindAvailable() && rage > 50) {
-            // TODO only available in serker stance
             log("    Whirlwind\n");
             events[EK_WhirlwindCD] = curTime + 10;
             specialAttack(whirlwindCost, specialTable,
@@ -719,6 +733,7 @@ void DPS::run(double duration) {
         case EK_BloodthirstCD:
         case EK_WhirlwindCD:
         case EK_OverpowerCD:
+        case EK_BerserkerRageCD:
         case EK_GlobalCD:
             clear(curEvent);
             break;
