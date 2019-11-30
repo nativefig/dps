@@ -213,7 +213,6 @@ struct AttackTable {
         if (chance < 0.0) {
             chance = 0.0;
         }
-        assert(chance <= 1.0);
 
         const size_t idx = size_t(hk);
         assert(idx < TableSize);
