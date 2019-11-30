@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
 from subprocess import check_call
 
@@ -176,10 +177,44 @@ def run(params):
     cmd = [ dps ]
     for k, v in merged_params.items():
         cmd.append("{}={}".format(k, v))
+    if args.verbose:
+        cmd.append("--verbose")
+        print(" ".join(cmd))
     check_call(cmd)
 
 def main():
-    #run([th, gear, th_arms])
+    parser = argparse.ArgumentParser(description="dps runner script")
+    parser.add_argument("-v", "--verbose", action="store_true")
+
+    global args
+    args = parser.parse_args()
+
+    print("2H No talents")
+    run([th, gear])
+    print("2H Arms")
+    run([th, gear, th_arms])
+    print("2H Arms/Prot")
+    run([th, gear, th_arms_prot])
+    print("2H Fury")
+    run([th, gear, th_fury])
+    print("2H Fury/Prot")
+    run([th, gear, th_fury_prot])
+    print("2H Arms/Fury")
+    run([th, gear, th_arms_fury])
+
+    print("")
+
+    print("DW No talents")
+    run([dw, gear])
+    print("DW Arms")
+    run([dw, gear, dw_arms])
+    print("DW Arms/Prot")
+    run([dw, gear, dw_arms_prot])
+    print("DW Fury")
+    run([dw, gear, dw_fury])
+    print("DW Fury/Prot")
+    run([dw, gear, dw_fury_prot])
+    print("DW Arms/Fury")
     run([dw, gear, dw_arms_fury])
 
 main()

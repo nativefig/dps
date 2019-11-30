@@ -258,7 +258,7 @@ struct DPS {
     const double whiteCritMul = 2.0 * attackMul;
     const double specialCritMul = 2.0 + (p.impaleLevel * 0.1) * attackMul;
     const double flurryBuff = 1.0 + ((p.flurryLevel == 0) ?
-                                     0.0 : 0.1 + (0.05 * p.flurryLevel - 1));
+                                     0.0 : 0.1 + (0.05 * (p.flurryLevel - 1)));
     const double swordSpecChance = 0.01 * p.swordSpecLevel;
     const double unbridledWrathChance = 0.08 * p.unbridledWrathLevel;
 
@@ -364,10 +364,10 @@ struct DPS {
 
     // TODO add speed enchant as a param
     double getMainSwingTime() const {
-        return p.mainSwingTime / flurryBuff;
+        return p.mainSwingTime / (flurryCharges ? flurryBuff : 1.0);
     }
     double getOffSwingTime() const {
-        return p.offSwingTime / flurryBuff;
+        return p.offSwingTime / (flurryCharges ? flurryBuff : 1.0);
     }
 
     double getCritChance() const {
@@ -411,6 +411,7 @@ struct DPS {
     }
     void applyUnbridledWrath() {
         if (ctx.chance(unbridledWrathChance)) {
+            if (verbose) { std::cerr << "    Unbridled wrath\n"; }
             gainRage(1);
         }
     }
@@ -489,13 +490,15 @@ struct DPS {
         HitKind hk = table.roll(ctx);
         if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
         double mul = 0.0;
+        bool success = true;
         switch (hk) {
-        case HK_Miss:
-        case HK_Parry:
-            return;
         case HK_Dodge:
             events[EK_OverpowerProcExpire] = curTime + overpowerProcDuration;
-            return;
+            // FALL THROUGH
+        case HK_Miss:
+        case HK_Parry:
+            success = false;
+            break;
         case HK_Glance:
             assert(0);
             break;
@@ -509,7 +512,9 @@ struct DPS {
             mul = attackMul;
             break;
         }
-        attack(mul);
+        if (success) {
+            attack(mul);
+        }
         applyUnbridledWrath();
     }
 
@@ -548,7 +553,7 @@ struct DPS {
             if (berserkerStance) {
                 trySwapStance();
             }
-            if (!berserkerStance) {
+            if (!berserkerStance && isOverpowerAvailable()) {
                 if (verbose) { std::cerr << "    Overpower\n"; }
                 events[EK_OverpowerCD] = curTime + 5;
                 clear(EK_OverpowerProcExpire);
@@ -577,13 +582,15 @@ struct DPS {
         HitKind hk = whiteTable.roll(ctx);
         if (verbose) { std::cerr << "    " << getHitKindName(hk) << "\n"; }
         double mul = 0.0;
+        bool success = true;
         switch (hk) {
-        case HK_Miss:
-        case HK_Parry:
-            return;
         case HK_Dodge:
             events[EK_OverpowerProcExpire] = curTime + overpowerProcDuration;
-            return;
+            // FALL THROUGH
+        case HK_Miss:
+        case HK_Parry:
+            success = false;
+            break;
         case HK_Glance:
             mul = glanceMul;
             break;
@@ -597,15 +604,25 @@ struct DPS {
             mul = attackMul;
             break;
         }
-        applySwordSpec();
-        applyUnbridledWrath();
+        if (!main) {
+            mul *= 0.5 * (1.0 + 0.05 * p.dualWieldSpecLevel);
+        }
 
         // Set next swing time after (possibly) applying flurry
-        events[EK_MainSwing] = curTime + (main ? getMainSwingTime() : getOffSwingTime());
+        {
+            auto ek = main ? EK_MainSwing : EK_OffSwing;
+            auto swingTime = main ? getMainSwingTime() : getOffSwingTime();
+            events[ek] = curTime + swingTime;
+        }
 
-        double damage = getWeaponDamage(main) * mul;
-        addDamage(damage);
-        gainRage(getWeaponSwingRage(damage));
+        if (success) {
+            double damage = getWeaponDamage(main) * mul;
+            addDamage(damage);
+            gainRage(getWeaponSwingRage(damage));
+        }
+
+        applySwordSpec();
+        applyUnbridledWrath();
     }
 
     void run(double duration);
