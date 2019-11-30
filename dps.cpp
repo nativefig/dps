@@ -299,6 +299,8 @@ struct DPS {
     const double hitBonus = p.hitBonus * 0.01;
     const double critBonus = p.critBonus * 0.01;
 
+    const unsigned stanceSwapMaxRage = 5 * p.tacticalMasteryLevel;
+
     unsigned strength = p.strength;
     unsigned agility = p.agility;
     unsigned bonusAttackPower = p.bonusAttackPower;
@@ -374,7 +376,10 @@ struct DPS {
         events[EK_StanceCD] = curTime + stanceCDDuration;
         berserkerStance = !berserkerStance;
         updateCritChance();
-        rage = std::min(rage, 5 * p.tacticalMasteryLevel);
+        if (rage > stanceSwapMaxRage) {
+            log("    stance swap wasted %u rage\n", rage - stanceSwapMaxRage);
+            rage = stanceSwapMaxRage;
+        }
     }
     void trySwapStance() {
         if (!isActive(EK_StanceCD)) {
@@ -459,8 +464,13 @@ struct DPS {
     }
 
     void gainRage(unsigned r) {
-        rage = std::min(rage + r, 100U);
-        log("    +%u rage, %u total\n", r, rage);
+        rage += r;
+        if (rage > 100) {
+            log("    +%u rage, 100 total, %u wasted\n", r, rage - 100);
+            rage = 100;
+        } else {
+            log("    +%u rage, %u total\n", r, rage);
+        }
     }
 
     bool isMortalStrikeAvailable() const {
@@ -554,7 +564,6 @@ struct DPS {
         if (isActive(EK_GlobalCD))
             return;
 
-        // FIXME GCD gets checked 3 times here - optimise?
         if (p.improvedBerserkerRageLevel &&
                 berserkerStance &&
                 !isActive(EK_BerserkerRageCD)) {
@@ -601,7 +610,6 @@ struct DPS {
                 if (p.improvedOverpowerLevel) {
                     table.set(HK_Crit, getCritChance() + 0.25 * p.improvedOverpowerLevel);
                 }
-                // FIXME we need to check rage again after swapping stances
                 specialAttack(overpowerCost, table,
                               [this](double mul) {
                     addDamage((getWeaponDamage() + 35) * mul);
