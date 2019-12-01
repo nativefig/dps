@@ -23,12 +23,14 @@
     X(DeepWoundsTick)                                                          \
     X(BloodrageTick)                                                           \
     X(OverpowerProcExpire)                                                     \
+    X(DeathWishExpire)                                                         \
     X(MortalStrikeCD)                                                          \
     X(BloodthirstCD)                                                           \
     X(WhirlwindCD)                                                             \
     X(OverpowerCD)                                                             \
     X(BloodrageCD)                                                             \
     X(BerserkerRageCD)                                                         \
+    X(DeathWishCD)                                                             \
     X(StanceCD)                                                                \
     X(GlobalCD)
 
@@ -142,6 +144,7 @@ bool verbose = false;
 // Constants ///////////////////////////////////////////////////////////////////
 unsigned mortalStrikeCost = 30;
 unsigned bloodthirstCost = 30;
+unsigned deathWishCost = 10;
 unsigned whirlwindCost = 25;
 unsigned overpowerCost = 5;
 double globalCDDuration = 1.5;
@@ -192,6 +195,7 @@ double overpowerProcDuration = 5; // TODO is this right?
     X(unbridledWrathLevel, unsigned, 0)                                        \
     X(improvedBattleShoutLevel, unsigned, 0)                                   \
     X(dualWieldSpecLevel, unsigned, 0)                                         \
+    X(deathWishLevel, unsigned, 0)                                             \
     X(flurryLevel, unsigned, 0)                                                \
     X(improvedBerserkerRageLevel, unsigned, 0)                                 \
     X(bloodthirstLevel, unsigned, 0)                                           \
@@ -303,6 +307,7 @@ struct DPS {
     const double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
     const double whiteCritMul = 2.0 * attackMul;
     const double specialCritMul = 2.0 + (p.impaleLevel * 0.1) * attackMul;
+
     const double flurryBuff = 1.0 + ((p.flurryLevel == 0) ?
                                      0.0 : 0.1 + (0.05 * (p.flurryLevel - 1)));
     const double swordSpecChance = 0.01 * p.swordSpecLevel;
@@ -333,8 +338,7 @@ struct DPS {
     // TODO use fixed precision fraction type for this
     unsigned rage = 0;
 
-    // Round for each tick or not?
-    unsigned deepWoundsTickDamage = 0;
+    double deepWoundsTickDamage = 0;
     unsigned flurryCharges = 0;
 
     Tick<EK_DeepWoundsTick, 4, 3> deepWoundsTicks;
@@ -443,7 +447,8 @@ struct DPS {
             return;
         deepWoundsTicks.start(*this);
         deepWoundsTickDamage = getWeaponDamage(true, /*average=*/true) *
-                               deepWoundsTickMul;
+                               deepWoundsTickMul *
+                               (isActive(EK_DeathWishExpire) ? 1.2 : 1.0);
     }
     void applyFlurry() {
         if (p.flurryLevel)
@@ -500,6 +505,28 @@ struct DPS {
         if (isActive(EK_MortalStrikeCD))
             return false;
         if (isActive(EK_GlobalCD))
+            return false;
+        return true;
+    }
+    bool isBerserkerRageAvailable() const {
+        if (!p.improvedBerserkerRageLevel)
+            return false;
+        if (!berserkerStance)
+            return false;
+        if (isActive(EK_GlobalCD))
+            return false;
+        if (isActive(EK_BerserkerRageCD))
+            return false;
+        return true;
+    }
+    bool isDeathWishAvailable() const {
+        if (!p.deathWishLevel)
+            return false;
+        if (rage < deathWishCost)
+            return false;
+        if (isActive(EK_GlobalCD))
+            return false;
+        if (isActive(EK_DeathWishCD))
             return false;
         return true;
     }
@@ -574,6 +601,7 @@ struct DPS {
             break;
         }
         if (success) {
+            mul *= isActive(EK_DeathWishExpire) ? 1.2 : 1.0;
             attack(mul);
         }
         applyUnbridledWrath();
@@ -583,12 +611,16 @@ struct DPS {
         if (isActive(EK_GlobalCD))
             return;
 
-        if (p.improvedBerserkerRageLevel &&
-                berserkerStance &&
-                !isActive(EK_BerserkerRageCD)) {
+        if (isBerserkerRageAvailable()) {
             log("    Berserker Rage\n");
             gainRage(5 * p.improvedBerserkerRageLevel);
             events[EK_BerserkerRageCD] = curTime + 30;
+            triggerGlobalCD();
+        } else if (isDeathWishAvailable()) {
+            log("    Death Wish\n");
+            rage -= deathWishCost;
+            events[EK_DeathWishExpire] = curTime + 30;
+            events[EK_DeathWishCD] = curTime + 180;
             triggerGlobalCD();
         } else if (isMortalStrikeAvailable()) {
             log("    Mortal Strike\n");
@@ -672,6 +704,7 @@ struct DPS {
         if (!main) {
             mul *= 0.5 * (1.0 + 0.05 * p.dualWieldSpecLevel);
         }
+        mul *= isActive(EK_DeathWishExpire) ? 1.2 : 1.0;
 
         // Set next swing time after (possibly) applying flurry
         {
@@ -758,6 +791,7 @@ void DPS::run(double duration) {
             break;
         case EK_MortalStrikeCD:
         case EK_BloodthirstCD:
+        case EK_DeathWishCD:
         case EK_WhirlwindCD:
         case EK_OverpowerCD:
         case EK_BerserkerRageCD:
@@ -769,6 +803,9 @@ void DPS::run(double duration) {
             events[curEvent] += 60;
             gainRage(10);
             bloodrageTicks.start(*this);
+            break;
+        case EK_DeathWishExpire:
+            clear(curEvent);
             break;
         case EK_OverpowerProcExpire:
             clear(curEvent);

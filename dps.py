@@ -77,6 +77,7 @@ th_fury = {
     "improvedBattleShoutLevel" : 5,
     "flurryLevel" : 5,
     "improvedBerserkerRageLevel" : 0,
+    "deathWishLevel" : 1,
     "bloodthirstLevel" : 1,
 }
 
@@ -86,6 +87,7 @@ th_fury_prot = {
     "unbridledWrathLevel" : 5,
     "flurryLevel" : 5,
     "improvedBerserkerRageLevel" : 2,
+    "deathWishLevel" : 1,
     "bloodthirstLevel" : 1,
 }
 
@@ -138,7 +140,8 @@ dw_fury = {
     "improvedBattleShoutLevel" : 5,
     "dualWieldSpecLevel" : 5,
     "flurryLevel" : 5,
-    "improvedBerserkerRageLevel" : 0,
+    "improvedBerserkerRageLevel" : 2,
+    "deathWishLevel" : 1,
     "bloodthirstLevel" : 1,
 }
 
@@ -149,6 +152,7 @@ dw_fury_prot = {
     "dualWieldSpecLevel" : 5,
     "flurryLevel" : 5,
     "improvedBerserkerRageLevel" : 2,
+    "deathWishLevel" : 1,
     "bloodthirstLevel" : 1,
 }
 
