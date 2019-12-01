@@ -603,7 +603,7 @@ struct DPS {
             events[EK_BloodthirstCD] = curTime + 6;
             specialAttack(bloodthirstCost, specialTable,
                           [this](double mul) {
-                addDamage(getAttackPower() * mul);
+                addDamage(getAttackPower() * mul * 0.45);
             });
         } else if (isWhirlwindAvailable() && rage > 50) {
             log("    Whirlwind\n");
