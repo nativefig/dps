@@ -201,13 +201,15 @@ def run_capture(cmd):
         fatal("Command exited with status {0}".format(exit_code))
     return out_text.decode("utf-8").strip()
 
-def run_params(params):
+def run_params(params, log=None):
     cmd = [ dps ]
     for k, v in params.items():
         cmd.append("{}={}".format(k, v))
     if args.verbose:
         cmd.append("--verbose")
         print(" ".join(cmd))
+    if log:
+        cmd.append("--log={}".format(log))
     return run_capture(cmd)
 
 def do_run(run):
@@ -225,14 +227,23 @@ def do_run(run):
 def do_run_set(run):
     print("Run: " + run.name)
 
-    rows = []
-    rows.append(["x"])
-    rows.append(["hit"])
-    rows.append(["crit"])
+    log_file = None
+    if args.log:
+        log_file = "{}.txt".format(run.name)
+    base  = run_params(run.params, log=log_file)
+    rows = [
+        ["x", "0"],
+        ["hit"],
+        ["crit"],
+        ["*10 str"],
+    ]
+    for row in rows[1:]:
+        row.append(base)
     for i in range(1,20):
         rows[0].append(str(i))
-        rows[1].append(run_params(add(run.params, {"hitBonus":i})))
-        rows[2].append(run_params(add(run.params, {"critBonus":i})))
+        rows[1].append(run_params(add(run.params, {"hitBonus" : i})))
+        rows[2].append(run_params(add(run.params, {"critBonus" : i})))
+        rows[3].append(run_params(add(run.params, {"strength" : i * 10})))
 
     with open("{}.csv".format(run.name), "w") as f:
         for row in rows:
