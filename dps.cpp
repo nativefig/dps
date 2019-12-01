@@ -89,6 +89,38 @@ const size_t NumHitKinds = 0
     ;
 ////////////////////////////////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////////////////////////////////
+#define DAMAGE_SOURCE_LIST \
+    X(MainSwing) \
+    X(OffSwing) \
+    X(SwordSpec) \
+    X(Bloodthirst) \
+    X(MortalStrike) \
+    X(DeepWounds) \
+    X(Whirlwind) \
+    X(Overpower)
+
+enum DamageSource {
+    #define X(NAME) DS_##NAME,
+    DAMAGE_SOURCE_LIST
+    #undef X
+};
+const char *getDamageSourceName(DamageSource ds) {
+    switch (ds) {
+    #define X(NAME) case DS_##NAME: return #NAME;
+    DAMAGE_SOURCE_LIST
+    #undef X
+    }
+    assert(0);
+    return "";
+}
+const size_t NumDamageSources = 0
+    #define X(NAME) + 1
+    DAMAGE_SOURCE_LIST
+    #undef X
+    ;
+////////////////////////////////////////////////////////////////////////////////
+
 FILE *logFile = nullptr;
 #if 0
 void log(const char *format, ...) {
@@ -333,7 +365,6 @@ struct DPS {
 
     double events[NumEventKinds];
     double curTime = 0.0;
-    uint64_t totalDamage = 0;
 
     // TODO use fixed precision fraction type for this
     unsigned rage = 0;
@@ -351,6 +382,15 @@ struct DPS {
 
     AttackTable whiteTable;
     AttackTable specialTable;
+
+    struct DamageStat {
+        unsigned long damage = 0;
+        unsigned count = 0;
+    };
+    DamageStat damageStats[NumDamageSources];
+
+    unsigned wastedRageSpillOver = 0;
+    unsigned wastedRageStanceSwap = 0;
 
     DPS(const Params &params, unsigned seed) :
         p(params), ctx(seed),
@@ -386,6 +426,14 @@ struct DPS {
         events[EK_BloodrageCD] = 0.0;
     }
 
+    unsigned long getTotalDamage() const {
+        unsigned long result = 0;
+        for (const DamageStat &d : damageStats) {
+            result += d.damage;
+        }
+        return result;
+    }
+
     bool isActive(EventKind ek) const {
         return events[ek] != DBL_MAX;
     }
@@ -400,7 +448,9 @@ struct DPS {
         berserkerStance = !berserkerStance;
         updateCritChance();
         if (rage > stanceSwapMaxRage) {
-            log("    stance swap wasted %u rage\n", rage - stanceSwapMaxRage);
+            auto waste = rage - stanceSwapMaxRage;
+            wastedRageStanceSwap += waste;
+            log("    stance swap wasted %u rage\n", waste);
             rage = stanceSwapMaxRage;
         }
     }
@@ -410,9 +460,10 @@ struct DPS {
         }
     }
 
-    void addDamage(double damage) {
+    void addDamage(DamageSource source, double damage) {
         log("    %.2f damage\n", damage);
-        totalDamage += uint64_t(damage);
+        damageStats[source].damage += (unsigned long)damage;
+        damageStats[source].count += 1;
     }
 
     // TODO add speed enchant as a param
@@ -460,7 +511,7 @@ struct DPS {
     void applySwordSpec() {
         if (ctx.chance(swordSpecChance)) {
             log("    Sword spec!\n");
-            weaponSwing();
+            weaponSwing(DS_SwordSpec);
         }
     }
     void applyUnbridledWrath() {
@@ -490,7 +541,9 @@ struct DPS {
     void gainRage(unsigned r) {
         rage += r;
         if (rage > 100) {
-            log("    +%u rage, 100 total, %u wasted\n", r, rage - 100);
+            auto waste = rage - 100;
+            wastedRageSpillOver += waste;
+            log("    +%u rage, 100 total, %u wasted\n", r, waste);
             rage = 100;
         } else {
             log("    +%u rage, %u total\n", r, rage);
@@ -570,7 +623,8 @@ struct DPS {
 
     // TODO work out how rage refund works for miss/dodge/parry
     template <class AttackCallback>
-    void specialAttack(unsigned cost, const AttackTable &table,
+    void specialAttack(DamageSource ds, unsigned cost,
+                       const AttackTable &table,
                        AttackCallback &&attack) {
         assert(rage >= cost);
         rage -= cost;
@@ -602,7 +656,7 @@ struct DPS {
         }
         if (success) {
             mul *= isActive(EK_DeathWishExpire) ? 1.2 : 1.0;
-            attack(mul);
+            addDamage(ds, attack() * mul);
         }
         applyUnbridledWrath();
     }
@@ -625,24 +679,24 @@ struct DPS {
         } else if (isMortalStrikeAvailable()) {
             log("    Mortal Strike\n");
             events[EK_MortalStrikeCD] = curTime + 6;
-            specialAttack(mortalStrikeCost, specialTable,
-                          [this](double mul) {
-                addDamage((getWeaponDamage() + 160) * mul);
+            specialAttack(DS_MortalStrike, mortalStrikeCost, specialTable,
+                          [this]() {
+                return getWeaponDamage() + 160;
             });
             applySwordSpec();
         } else if (isBloodthirstAvailable()) {
             log("    Bloodthirst\n");
             events[EK_BloodthirstCD] = curTime + 6;
-            specialAttack(bloodthirstCost, specialTable,
-                          [this](double mul) {
-                addDamage(getAttackPower() * mul * 0.45);
+            specialAttack(DS_Bloodthirst, bloodthirstCost, specialTable,
+                          [this]() {
+                return getAttackPower() * 0.45;
             });
         } else if (isWhirlwindAvailable() && rage > 50) {
             log("    Whirlwind\n");
             events[EK_WhirlwindCD] = curTime + 10;
-            specialAttack(whirlwindCost, specialTable,
-                          [this](double mul) {
-                addDamage(getWeaponDamage() * mul);
+            specialAttack(DS_Whirlwind, whirlwindCost, specialTable,
+                          [this]() {
+                return getWeaponDamage();
             });
             // FIXME find out about this:
             //applySwordSpec();
@@ -661,9 +715,9 @@ struct DPS {
                 if (p.improvedOverpowerLevel) {
                     table.set(HK_Crit, getCritChance() + 0.25 * p.improvedOverpowerLevel);
                 }
-                specialAttack(overpowerCost, table,
-                              [this](double mul) {
-                    addDamage((getWeaponDamage() + 35) * mul);
+                specialAttack(DS_Overpower, overpowerCost, table,
+                              [this]() {
+                    return getWeaponDamage() + 35;
                 });
                 applySwordSpec();
                 trySwapStance();
@@ -675,7 +729,7 @@ struct DPS {
         return damage / 30.7;
     }
 
-    void weaponSwing(bool main = true) {
+    void weaponSwing(DamageSource ds) {
         HitKind hk = whiteTable.roll(ctx);
         log("    %s\n", getHitKindName(hk));
         double mul = 0.0;
@@ -701,24 +755,26 @@ struct DPS {
             mul = attackMul;
             break;
         }
-        if (!main) {
+        if (ds == DS_OffSwing) {
             mul *= 0.5 * (1.0 + 0.05 * p.dualWieldSpecLevel);
         }
         mul *= isActive(EK_DeathWishExpire) ? 1.2 : 1.0;
 
         // Set next swing time after (possibly) applying flurry
         {
-            auto ek = main ? EK_MainSwing : EK_OffSwing;
-            auto swingTime = main ? getMainSwingTime() : getOffSwingTime();
+            auto ek = (ds == DS_OffSwing) ? EK_OffSwing : EK_MainSwing;
+            auto swingTime = (ds == DS_OffSwing) ? getOffSwingTime() : getMainSwingTime();
             events[ek] = curTime + swingTime;
         }
 
         if (success) {
-            double damage = getWeaponDamage(main) * mul;
-            addDamage(damage);
+            double damage = getWeaponDamage(ds != DS_OffSwing) * mul;
+            addDamage(ds, damage);
+            // TODO does sword spec generate rage?
             gainRage(getWeaponSwingRage(damage));
         }
 
+        // TODO can sword spec trigger sword spec?
         applySwordSpec();
         applyUnbridledWrath();
     }
@@ -769,13 +825,13 @@ void DPS::run(double duration) {
             if (flurryCharges) {
                 --flurryCharges;
             }
-            weaponSwing(true);
+            weaponSwing(DS_MainSwing);
             break;
         case EK_OffSwing:
             if (flurryCharges) {
                 --flurryCharges;
             }
-            weaponSwing(false);
+            weaponSwing(DS_OffSwing);
             break;
         case EK_AngerManagement:
             events[curEvent] += 3;
@@ -783,7 +839,7 @@ void DPS::run(double duration) {
             break;
         case EK_DeepWoundsTick:
             deepWoundsTicks.tick(*this);
-            addDamage(deepWoundsTickDamage);
+            addDamage(DS_DeepWounds, deepWoundsTickDamage);
             break;
         case EK_BloodrageTick:
             bloodrageTicks.tick(*this);
@@ -1016,7 +1072,7 @@ enum ResultKind {
 void emitResult(ResultKind rk, const DPS &dps) {
     switch (rk) {
     case RK_dps:
-        printf("%.4f\n", dps.totalDamage / dps.curTime);
+        printf("%.4f\n", dps.getTotalDamage() / dps.curTime);
         return;
     }
     assert(0);
@@ -1071,6 +1127,19 @@ int main(int argc, char **argv) {
     DPS dps(params, seed);
     dps.run(durationHours * 60 * 60);
 
+    auto totalDamage = dps.getTotalDamage();
+    log("Damage: %lu\n", totalDamage);
+    for (unsigned i = 0; i < NumDamageSources; ++i) {
+        DamageSource ds = DamageSource(i);
+        const DPS::DamageStat &stat = dps.damageStats[i];
+        log("    %s: %u events, %lu damage, %.2f%%\n",
+            getDamageSourceName(ds), stat.count, stat.damage,
+            (double(stat.damage * 100) / totalDamage));
+    }
+
+    log("Total wasted rage due to spill-over: %u\n", dps.wastedRageSpillOver);
+    log("Total wasted rage due to stance swap: %u\n", dps.wastedRageStanceSwap);
+
     emitResult(resultKind, dps);
 #if 0
     if (verbose) {
@@ -1081,3 +1150,5 @@ int main(int argc, char **argv) {
 }
 
 // TODO decide whether it's worth using overpower without the talent
+// TODO log:
+// flurry uptime

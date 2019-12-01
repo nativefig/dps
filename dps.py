@@ -207,13 +207,14 @@ def run_capture(cmd):
 
 def run_params(params, log=None):
     cmd = [ dps ]
-    for k, v in params.items():
-        cmd.append("{}={}".format(k, v))
+    cmd.append("--duration={}".format(args.duration))
     if args.verbose:
         cmd.append("--verbose")
-        print(" ".join(cmd))
     if log:
         cmd.append("--log={}".format(log))
+
+    for k, v in params.items():
+        cmd.append("{}={}".format(k, v))
     return run_capture(cmd)
 
 def quick_run(run):
@@ -257,6 +258,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--log", action="store_true")
     parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--duration", default="100")
     #parser.add_argument("modes", nargs="+")
 
     global args
