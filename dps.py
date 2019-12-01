@@ -212,24 +212,23 @@ def run_params(params, log=None):
         cmd.append("--log={}".format(log))
     return run_capture(cmd)
 
-def do_run(run):
-    print("Run: " + run.name)
-    cmd = [ dps ]
-    for k, v in run.params.items():
-        cmd.append("{}={}".format(k, v))
-    if args.verbose:
-        cmd.append("--verbose")
-    if args.log:
-        cmd.append("--log={}.txt".format(run.name))
-    subprocess.check_call(cmd)
-    print("")
-
-def do_run_set(run):
+def quick_run(run):
     print("Run: " + run.name)
 
     log_file = None
     if args.log:
         log_file = "{}.txt".format(run.name)
+
+    dps = run_params(run.params, log=log_file)
+    print(dps)
+
+def full_run(run):
+    print("Run: " + run.name)
+
+    log_file = None
+    if args.log:
+        log_file = "{}.txt".format(run.name)
+
     base  = run_params(run.params, log=log_file)
     rows = [
         ["x", "0"],
@@ -253,6 +252,7 @@ def main():
     parser = argparse.ArgumentParser(description="dps runner script")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--log", action="store_true")
+    parser.add_argument("--quick", action="store_true")
     #parser.add_argument("modes", nargs="+")
 
     global args
@@ -274,7 +274,11 @@ def main():
         #Run("dw-arms-fury", merge(dw, gear, dw_arms_fury)),
     ]
 
-    for run in runs:
-        do_run_set(run)
+    if args.quick:
+        for run in runs:
+            quick_run(run)
+    else:
+        for run in runs:
+            full_run(run)
 
 main()
