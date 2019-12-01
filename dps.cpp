@@ -189,7 +189,7 @@ double overpowerProcDuration = 5; // TODO is this right?
     X(frontAttack, bool, false)                                                \
     X(dualWield, bool, false)                                                  \
     X(enemyLevel, unsigned, 63)                                                \
-    X(armorMul, double, 0.66)                                                  \
+    X(armorMul, double, 0.80)                                                  \
                                                                                \
     /* Stats */                                                                \
                                                                                \
