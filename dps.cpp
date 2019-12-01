@@ -196,10 +196,30 @@ double overpowerProcDuration = 5; // TODO is this right?
     X(improvedBerserkerRageLevel, unsigned, 0)                                 \
     X(bloodthirstLevel, unsigned, 0)                                           \
 
+void printVal(FILE *file, double val) {
+    fprintf(file, "%.2f", val);
+}
+void printVal(FILE *file, unsigned val) {
+    fprintf(file, "%u", val);
+}
+void printVal(FILE *file, bool val) {
+    fprintf(file, "%u", unsigned(val));
+}
+
 struct Params {
     #define X(NAME, TYPE, VALUE) TYPE NAME = VALUE;
     PARAM_LIST
     #undef X
+
+    void print(FILE *file) const {
+        fprintf(file, "Params:\n");
+        #define X(NAME, TYPE, VALUE) \
+        fprintf(file, "    " #NAME "="); \
+        printVal(file, NAME); \
+        fprintf(file, "\n");
+        PARAM_LIST
+        #undef X
+    }
 };
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -953,17 +973,9 @@ struct ArgParser {
     }
 };
 
-#if 0
-template <class... Ts>
-void print(const char *format, Ts... args) {
-    char buf[1024];
-    const char *cur = format;
-    bool esc = false;
-    while (char ch = *cur) {
-        ++cur;
-    }
-}
-#endif
+enum Output {
+    Out_dps,
+};
 
 int main(int argc, char **argv) {
     Params params;
@@ -1005,6 +1017,9 @@ int main(int argc, char **argv) {
     }
 
     log("Seed: %u\n", seed);
+    if (logFile) {
+        params.print(logFile);
+    }
 
     DPS dps(params, seed);
     double duration = durationHours * 60 * 60;
@@ -1016,5 +1031,4 @@ int main(int argc, char **argv) {
     }
 }
 
-// TODO print out seed on every run to help reproduce bugs
 // TODO decide whether it's worth using overpower without the talent

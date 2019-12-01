@@ -203,9 +203,8 @@ def do_run(run):
         cmd.append("{}={}".format(k, v))
     if args.verbose:
         cmd.append("--verbose")
-        print(" ".join(cmd))
     if args.log:
-        cmd.append("--log={}.text".format(run.name))
+        cmd.append("--log={}.txt".format(run.name))
     check_call(cmd)
     print("")
 
