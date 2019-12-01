@@ -2,7 +2,8 @@
 
 import argparse
 import os
-from subprocess import check_call
+import sys
+import subprocess
 
 dps_dir = os.path.dirname(os.path.abspath(__file__))
 dps = os.path.join(dps_dir, "dps")
@@ -187,6 +188,19 @@ def add(*params_list):
                 result[k] = v
     return result
 
+def fatal(msg):
+    sys.stderr.write(msg + "\n")
+    sys.exit(1)
+
+def run_capture(cmd):
+    sys.stdout.flush()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    out_text, _ = proc.communicate()
+    exit_code = proc.returncode
+    if exit_code:
+        fatal("Command exited with status {0}".format(exit_code))
+    return out_text.decode("utf-8").strip()
+
 def run_params(params):
     cmd = [ dps ]
     for k, v in params.items():
@@ -194,7 +208,7 @@ def run_params(params):
     if args.verbose:
         cmd.append("--verbose")
         print(" ".join(cmd))
-    check_call(cmd)
+    return run_capture(cmd)
 
 def do_run(run):
     print("Run: " + run.name)
@@ -205,13 +219,24 @@ def do_run(run):
         cmd.append("--verbose")
     if args.log:
         cmd.append("--log={}.txt".format(run.name))
-    check_call(cmd)
+    subprocess.check_call(cmd)
     print("")
 
 def do_run_set(run):
     print("Run: " + run.name)
-    for i in range(5):
-        run_params(add(run.params, {"hitBonus":i}))
+
+    rows = []
+    rows.append(["x"])
+    rows.append(["hit"])
+    rows.append(["crit"])
+    for i in range(1,20):
+        rows[0].append(str(i))
+        rows[1].append(run_params(add(run.params, {"hitBonus":i})))
+        rows[2].append(run_params(add(run.params, {"critBonus":i})))
+
+    with open("{}.csv".format(run.name), "w") as f:
+        for row in rows:
+            f.write(",".join(row) + "\n")
 
 def main():
     parser = argparse.ArgumentParser(description="dps runner script")

@@ -973,9 +973,17 @@ struct ArgParser {
     }
 };
 
-enum Output {
-    Out_dps,
+enum ResultKind {
+    RK_dps,
 };
+void emitResult(ResultKind rk, const DPS &dps) {
+    switch (rk) {
+    case RK_dps:
+        printf("%.4f\n", dps.totalDamage / dps.curTime);
+        return;
+    }
+    assert(0);
+}
 
 int main(int argc, char **argv) {
     Params params;
@@ -986,6 +994,8 @@ int main(int argc, char **argv) {
 
     bool haveLog = false;
     StrView logFilename;
+
+    ResultKind resultKind = RK_dps;
 
     ArgParser argParser(argv + 1, argc - 1);
     while (!argParser.finished()) {
@@ -1022,13 +1032,15 @@ int main(int argc, char **argv) {
     }
 
     DPS dps(params, seed);
-    double duration = durationHours * 60 * 60;
-    dps.run(duration);
-    printf("DPS: %.4f\n", dps.totalDamage / duration);
+    dps.run(durationHours * 60 * 60);
+
+    emitResult(resultKind, dps);
+#if 0
     if (verbose) {
         dps.whiteTable.print(stderr);
         dps.whiteTable.printStats(stderr);
     }
+#endif
 }
 
 // TODO decide whether it's worth using overpower without the talent
