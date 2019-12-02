@@ -603,13 +603,17 @@ struct DPS {
     bool isWhirlwindAvailable() const {
         if (!berserkerStance)
             return false;
-        if (rage < whirlwindCost)
-            return false;
         if (isActive(EK_WhirlwindCD))
             return false;
         if (isActive(EK_GlobalCD))
             return false;
-        return true;
+        if (rage >= 70)
+            return true;
+        if (rage < whirlwindCost)
+            return false;
+        if (isActive(EK_OverpowerProcExpire) && (rage > stanceSwapMaxRage + 10))
+            return true;
+        return false;
     }
     // Note: doesn't account for stance
     bool isOverpowerAvailable() const {
@@ -696,7 +700,7 @@ struct DPS {
                           [this]() {
                 return getAttackPower() * 0.45;
             });
-        } else if (isWhirlwindAvailable() && rage > 50) {
+        } else if (isWhirlwindAvailable()) {
             log("    Whirlwind\n");
             events[EK_WhirlwindCD] = curTime + 10;
             specialAttack(DS_Whirlwind, whirlwindCost, specialTable,

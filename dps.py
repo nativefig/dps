@@ -274,7 +274,7 @@ def main():
         #Run("2h-arms-fury", merge(th, gear, th_arms_fury)),
 
         #Run("dw-no-talents", merge(dw, gear)),
-        Run("dw-arms", merge(dw, gear, dw_arms)),
+        #Run("dw-arms", merge(dw, gear, dw_arms)),
         #Run("dw-arms-prot", merge(dw, gear, dw_arms_prot)),
         Run("dw-fury", merge(dw, gear, dw_fury)),
         #Run("dw-fury-prot", merge(dw, gear, dw_fury_prot)),
