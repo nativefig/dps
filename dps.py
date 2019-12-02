@@ -262,8 +262,8 @@ def full_run(run):
 def main():
     parser = argparse.ArgumentParser(description="dps runner script")
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--log", action="store_true")
-    parser.add_argument("--quick", action="store_true")
+    parser.add_argument("-l", "--log", action="store_true")
+    parser.add_argument("-q", "--quick", action="store_true")
     parser.add_argument("--duration", default="100")
     parser.add_argument("--bin", default=dps)
     #parser.add_argument("modes", nargs="+")
