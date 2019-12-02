@@ -263,7 +263,7 @@ struct AttackTable {
     static const size_t TableSize = NumHitKinds - 1;
 
     uint64_t table[TableSize] = { 0 };
-    //size_t counts[NumHitKinds] = { 0 };
+    mutable size_t counts[NumHitKinds] = { 0 };
 
     void set(HitKind hk, double chance) {
         if (chance < 0.0) {
@@ -289,7 +289,7 @@ struct AttackTable {
             if (roll < table[i])
                 break;
         }
-        //++(counts[i]);
+        ++(counts[i]);
         return HitKind(i);
     }
 
@@ -312,20 +312,17 @@ struct AttackTable {
 #endif
     }
     void printStats(FILE *file) const {
-        (void)file;
-        // TODO store these elsewhere
-#if 0
         size_t total = 0;
         for (size_t count : counts) {
             total += count;
         }
-        out << "{\n";
+        fprintf(file, "{\n");
         for (size_t i = 0; i < NumHitKinds; ++i) {
-            out << "  " << getHitKindName(HitKind(i)) << ": "
-                        << (double(counts[i]) / total) << "\n";
+            fprintf(file, "    %s: %.2f%%\n",
+                    getHitKindName(HitKind(i)),
+                    (double(counts[i] * 100) / total));
         }
-        out << "}\n";
-#endif
+        fprintf(file, "}\n");
     }
     void dump() const;
 };
@@ -382,6 +379,7 @@ struct DPS {
 
     AttackTable whiteTable;
     AttackTable specialTable;
+    AttackTable overpowerTable;
 
     struct DamageStat {
         unsigned long damage = 0;
@@ -414,6 +412,8 @@ struct DPS {
 
         specialTable.set(HK_Miss, specialMissChance);
         specialTable.set(HK_Dodge, dodgeChance);
+
+        overpowerTable.set(HK_Miss, specialMissChance);
 
         updateCritChance();
 
@@ -489,6 +489,7 @@ struct DPS {
         double ch = getCritChance();
         whiteTable.set(HK_Crit, ch);
         specialTable.set(HK_Crit, ch);
+        overpowerTable.set(HK_Crit, ch + 0.25 * p.improvedOverpowerLevel);
     }
     double getAttackPower() const {
         return strength * 2 + battleShoutAttackPower + bonusAttackPower;
@@ -710,7 +711,6 @@ struct DPS {
             // FIXME find out about this:
             //applySwordSpec();
         } else if (isOverpowerAvailable()) {
-            // TODO use whirlwind if possible before stance swap
             if (berserkerStance) {
                 trySwapStance();
             }
@@ -718,13 +718,7 @@ struct DPS {
                 log("    Overpower\n");
                 events[EK_OverpowerCD] = curTime + 5;
                 clear(EK_OverpowerProcExpire);
-                AttackTable table = specialTable;
-                table.set(HK_Dodge, 0);
-                table.set(HK_Parry, 0);
-                if (p.improvedOverpowerLevel) {
-                    table.set(HK_Crit, getCritChance() + 0.25 * p.improvedOverpowerLevel);
-                }
-                specialAttack(DS_Overpower, overpowerCost, table,
+                specialAttack(DS_Overpower, overpowerCost, overpowerTable,
                               [this]() {
                     return getWeaponDamage() + 35;
                 });
@@ -1150,15 +1144,14 @@ int main(int argc, char **argv) {
     log("Total wasted rage due to stance swap: %u\n", dps.wastedRageStanceSwap);
     log("Total spent rage: %u\n", dps.spentRage);
 
-    emitResult(resultKind, dps);
-#if 0
-    if (verbose) {
-        dps.whiteTable.print(stderr);
-        dps.whiteTable.printStats(stderr);
+    if (logFile) {
+        log("White hit table ");
+        dps.whiteTable.printStats(logFile);
+        log("Special hit table ");
+        dps.specialTable.printStats(logFile);
+        log("Overpower hit table ");
+        dps.overpowerTable.printStats(logFile);
     }
-#endif
-}
 
-// TODO decide whether it's worth using overpower without the talent
-// TODO log:
-// flurry uptime
+    emitResult(resultKind, dps);
+}
