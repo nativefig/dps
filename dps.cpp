@@ -502,7 +502,7 @@ struct DPS {
                                (isActive(EK_DeathWishExpire) ? 1.2 : 1.0);
     }
     void applyFlurry() {
-        if (p.flurryLevel)
+        if (!p.flurryLevel)
             return;
         flurryCharges = 3;
         // TODO Decide if this should update pending swings?
