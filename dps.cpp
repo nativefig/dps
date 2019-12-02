@@ -391,6 +391,7 @@ struct DPS {
 
     unsigned wastedRageSpillOver = 0;
     unsigned wastedRageStanceSwap = 0;
+    unsigned spentRage = 0;
 
     DPS(const Params &params, unsigned seed) :
         p(params), ctx(seed),
@@ -549,6 +550,11 @@ struct DPS {
             log("    +%u rage, %u total\n", r, rage);
         }
     }
+    void spendRage(unsigned r) {
+        assert(rage >= r);
+        spentRage += r;
+        rage -= r;
+    }
 
     bool isMortalStrikeAvailable() const {
         if (!p.mortalStrikeLevel)
@@ -626,8 +632,7 @@ struct DPS {
     void specialAttack(DamageSource ds, unsigned cost,
                        const AttackTable &table,
                        AttackCallback &&attack) {
-        assert(rage >= cost);
-        rage -= cost;
+        spendRage(cost);
         triggerGlobalCD();
         HitKind hk = table.roll(ctx);
         log("    %s\n", getHitKindName(hk));
@@ -672,7 +677,7 @@ struct DPS {
             triggerGlobalCD();
         } else if (isDeathWishAvailable()) {
             log("    Death Wish\n");
-            rage -= deathWishCost;
+            spendRage(deathWishCost);
             events[EK_DeathWishExpire] = curTime + 30;
             events[EK_DeathWishCD] = curTime + 180;
             triggerGlobalCD();
@@ -1139,6 +1144,7 @@ int main(int argc, char **argv) {
 
     log("Total wasted rage due to spill-over: %u\n", dps.wastedRageSpillOver);
     log("Total wasted rage due to stance swap: %u\n", dps.wastedRageStanceSwap);
+    log("Total spent rage: %u\n", dps.spentRage);
 
     emitResult(resultKind, dps);
 #if 0

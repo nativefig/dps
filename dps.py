@@ -206,7 +206,7 @@ def run_capture(cmd):
     return out_text.decode("utf-8").strip()
 
 def run_params(params, log=None):
-    cmd = [ dps ]
+    cmd = [ args.bin ]
     cmd.append("--duration={}".format(args.duration))
     if args.verbose:
         cmd.append("--verbose")
@@ -259,6 +259,7 @@ def main():
     parser.add_argument("--log", action="store_true")
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--duration", default="100")
+    parser.add_argument("--bin", default=dps)
     #parser.add_argument("modes", nargs="+")
 
     global args
