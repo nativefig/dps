@@ -335,7 +335,7 @@ struct DPS {
     const double attackMul = p.armorMul * (1.0 + 0.01 * p.twoHandSpecLevel);
     const double glanceMul = (levelDelta < 2 ? 0.95 : levelDelta == 2 ? 0.85 : 0.65) * attackMul;
     const double whiteCritMul = 2.0 * attackMul;
-    const double specialCritMul = 2.0 + (p.impaleLevel * 0.1) * attackMul;
+    const double specialCritMul = (2.0 + (p.impaleLevel * 0.1)) * attackMul;
 
     const double flurryBuff = 1.0 + ((p.flurryLevel == 0) ?
                                      0.0 : 0.1 + (0.05 * (p.flurryLevel - 1)));
@@ -1075,7 +1075,7 @@ enum ResultKind {
 void emitResult(ResultKind rk, const DPS &dps) {
     switch (rk) {
     case RK_dps:
-        printf("%.4f\n", dps.getTotalDamage() / dps.curTime);
+        printf("%.2f\n", dps.getTotalDamage() / dps.curTime);
         return;
     }
     assert(0);
