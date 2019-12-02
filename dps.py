@@ -8,15 +8,21 @@ import subprocess
 dps_dir = os.path.dirname(os.path.abspath(__file__))
 dps = os.path.join(dps_dir, "dps")
 
-#enemyLevel=63
-#armorMul=0.66
-
-th = {
+warblade = {
     "dualWield" : 0,
     "mainSwingTime" : 3.3,
-    "mainWeaponDamageMin" : 142,
-    "mainWeaponDamageMax" : 214,
+    "mainWeaponDamageMin" : 142 + 1,
+    "mainWeaponDamageMax" : 214 + 22,
 }
+
+demonshear = {
+    "dualWield" : 0,
+    "mainSwingTime" : 3.8,
+    "mainWeaponDamageMin" : 163,
+    "mainWeaponDamageMax" : 246,
+}
+
+th = demonshear
 
 dw = {
     "dualWield" : 1,
