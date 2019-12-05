@@ -198,6 +198,7 @@ double overpowerProcDuration = 5; // TODO is this right?
     X(bonusAttackPower, unsigned, 0)                                           \
     X(hitBonus, unsigned, 0)                                                   \
     X(critBonus, unsigned, 0)                                                  \
+    X(hasteBonus, unsigned, 0)                                                 \
                                                                                \
     /* Weapons */                                                              \
                                                                                \
@@ -469,10 +470,10 @@ struct DPS {
 
     // TODO add speed enchant as a param
     double getMainSwingTime() const {
-        return p.mainSwingTime / (flurryCharges ? flurryBuff : 1.0);
+        return p.mainSwingTime / ((flurryCharges ? flurryBuff : 1.0) * (1.0 + 0.01 * p.hasteBonus));
     }
     double getOffSwingTime() const {
-        return p.offSwingTime / (flurryCharges ? flurryBuff : 1.0);
+        return p.offSwingTime / ((flurryCharges ? flurryBuff : 1.0) * (1.0 + 0.01 * p.hasteBonus));
     }
 
     double getCritChance() const {
