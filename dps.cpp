@@ -202,6 +202,7 @@ double overpowerProcDuration = 5; // TODO is this right?
                                                                                \
     /* Weapons */                                                              \
                                                                                \
+    X(mainHandDagger, bool, false)                                             \
     X(mainSwingTime, double, 3.3)                                              \
     X(mainWeaponDamageMin, unsigned, 100)                                      \
     X(mainWeaponDamageMax, unsigned, 200)                                      \
@@ -352,6 +353,9 @@ struct DPS {
 
     const double hitBonus = p.hitBonus * 0.01;
     const double critBonus = p.critBonus * 0.01;
+
+    const double specialAttackWeaponSpeed = !p.dualWield ? 3.3 :
+                                            p.mainHandDagger ? 1.7 : 2.4;
 
     const unsigned stanceSwapMaxRage = 5 * p.tacticalMasteryLevel;
 
@@ -510,7 +514,8 @@ struct DPS {
         flurryCharges = 3;
         // TODO Decide if this should update pending swings?
     }
-    // TODO can this proc off misses?
+    // FIXME Special attack sword spec procs should use getSpecialWeaponDamage.
+    // Should they also apply other bonus damage e.g. mortal strike damage?
     void applySwordSpec() {
         if (ctx.chance(swordSpecChance)) {
             log("    Sword spec!\n");
@@ -527,18 +532,23 @@ struct DPS {
     // Return weapon damage without any multipliers applied
     // TODO How does deep wounds work with offhand crits?
     double getWeaponDamage(bool main = true, bool average = false) {
-        auto min = main ? p.mainWeaponDamageMin : p.offWeaponDamageMin;
-        auto max = main ? p.mainWeaponDamageMax : p.offWeaponDamageMax;
-        auto &dist = main ? mainWeaponDamageDist : offWeaponDamageDist;
         // TODO Should this be using base swing time or modified swing time? Surely base.
-        auto swingTime = main ? p.mainSwingTime : p.offSwingTime;
         double base;
         if (average) {
+            auto min = main ? p.mainWeaponDamageMin : p.offWeaponDamageMin;
+            auto max = main ? p.mainWeaponDamageMax : p.offWeaponDamageMax;
             base = min + double(max - min) / 2;
         } else {
+            auto &dist = main ? mainWeaponDamageDist : offWeaponDamageDist;
             base = dist(ctx.rng);
         }
+        auto swingTime = main ? p.mainSwingTime : p.offSwingTime;
         return base + ((getAttackPower() / 14) * swingTime);
+    }
+
+    double getSpecialWeaponDamage() {
+        double base = mainWeaponDamageDist(ctx.rng);
+        return base + ((getAttackPower() / 14) * specialAttackWeaponSpeed);
     }
 
     void gainRage(unsigned r) {
@@ -692,7 +702,7 @@ struct DPS {
             events[EK_MortalStrikeCD] = curTime + 6;
             specialAttack(DS_MortalStrike, mortalStrikeCost, specialTable,
                           [this]() {
-                return getWeaponDamage() + 160;
+                return getSpecialWeaponDamage() + 160;
             });
             applySwordSpec();
         } else if (isBloodthirstAvailable()) {
@@ -707,10 +717,9 @@ struct DPS {
             events[EK_WhirlwindCD] = curTime + 10;
             specialAttack(DS_Whirlwind, whirlwindCost, specialTable,
                           [this]() {
-                return getWeaponDamage();
+                return getSpecialWeaponDamage();
             });
-            // FIXME find out about this:
-            //applySwordSpec();
+            applySwordSpec();
         } else if (isOverpowerAvailable()) {
             if (berserkerStance) {
                 trySwapStance();
@@ -721,7 +730,7 @@ struct DPS {
                 clear(EK_OverpowerProcExpire);
                 specialAttack(DS_Overpower, overpowerCost, overpowerTable,
                               [this]() {
-                    return getWeaponDamage() + 35;
+                    return getSpecialWeaponDamage() + 35;
                 });
                 applySwordSpec();
                 trySwapStance();

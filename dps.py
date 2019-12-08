@@ -22,7 +22,7 @@ demonshear = {
     "mainWeaponDamageMax" : 246,
 }
 
-th = demonshear
+th = warblade
 
 dw = {
     "dualWield" : 1,
@@ -36,11 +36,11 @@ dw = {
 }
 
 gear = {
-    "strength" : 223,
+    "strength" : 237,
     "agility" : 172,
-    "bonusAttackPower" : 140,
+    "bonusAttackPower" : 100,
     "hitBonus" : 4,
-    "critBonus" : 1,
+    "critBonus" : 4,
 }
 
 th_arms = {
